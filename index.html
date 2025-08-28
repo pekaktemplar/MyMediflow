@@ -69,6 +69,7 @@
             db: null,
             auth: null,
             userId: null,
+            appId: 'default-app-id', // Add appId to the global state
             loading: true,
             error: null,
             currentPage: 'dashboard',
@@ -217,8 +218,8 @@
             
             if (!AppState.db || !AppState.userId) return;
 
-            const meetingsSnapshot = await getDocs(query(collection(AppState.db, `artifacts/${__app_id}/users/${AppState.userId}/meetings`)));
-            const actionItemsSnapshot = await getDocs(query(collection(AppState.db, `artifacts/${__app_id}/users/${AppState.userId}/actionItems`)));
+            const meetingsSnapshot = await getDocs(query(collection(AppState.db, `artifacts/${AppState.appId}/users/${AppState.userId}/meetings`)));
+            const actionItemsSnapshot = await getDocs(query(collection(AppState.db, `artifacts/${AppState.appId}/users/${AppState.userId}/actionItems`)));
             
             const meetings = meetingsSnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
             const actionItems = actionItemsSnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
@@ -282,7 +283,7 @@
             searchInput.addEventListener('input', applyFilters);
             filterSelect.addEventListener('change', applyFilters);
             
-            const q = query(collection(AppState.db, `artifacts/${__app_id}/users/${AppState.userId}/meetings`));
+            const q = query(collection(AppState.db, `artifacts/${AppState.appId}/users/${AppState.userId}/meetings`));
             const unsubscribe = onSnapshot(q, (snapshot) => {
                 const meetingsData = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
                 meetingsData.sort((a, b) => new Date(b.date) - new Date(a.date));
@@ -297,7 +298,7 @@
             if (!AppState.db || !AppState.userId || !AppState.currentMeetingId) return;
 
             const meetingId = AppState.currentMeetingId;
-            const meetingRef = doc(AppState.db, `artifacts/${__app_id}/users/${AppState.userId}/meetings`, meetingId);
+            const meetingRef = doc(AppState.db, `artifacts/${AppState.appId}/users/${AppState.userId}/meetings`, meetingId);
             
             const unsubMeeting = onSnapshot(meetingRef, (docSnap) => {
                 if (!docSnap.exists()) {
@@ -306,7 +307,7 @@
                 }
                 const meeting = { id: docSnap.id, ...docSnap.data() };
                 
-                const actionItemsQuery = query(collection(AppState.db, `artifacts/${__app_id}/users/${AppState.userId}/actionItems`), where("meetingId", "==", meetingId));
+                const actionItemsQuery = query(collection(AppState.db, `artifacts/${AppState.appId}/users/${AppState.userId}/actionItems`), where("meetingId", "==", meetingId));
                 const unsubItems = onSnapshot(actionItemsQuery, (snapshot) => {
                     const actionItems = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
                     const groupedActionItems = actionItems.reduce((acc, item) => {
@@ -373,11 +374,11 @@
                 
                 content.innerHTML = LoadingSpinner();
 
-                const meetingsQuery = query(collection(AppState.db, `artifacts/${__app_id}/users/${AppState.userId}/meetings`), where('participants', 'array-contains', selectedClinic));
+                const meetingsQuery = query(collection(AppState.db, `artifacts/${AppState.appId}/users/${AppState.userId}/meetings`), where('participants', 'array-contains', selectedClinic));
                 unsubMeetings = onSnapshot(meetingsQuery, meetingsSnapshot => {
                     const meetings = meetingsSnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })).sort((a, b) => new Date(b.date) - new Date(a.date));
 
-                    const itemsQuery = query(collection(AppState.db, `artifacts/${__app_id}/users/${AppState.userId}/actionItems`), where('assignedTo', '==', selectedClinic));
+                    const itemsQuery = query(collection(AppState.db, `artifacts/${AppState.appId}/users/${AppState.userId}/actionItems`), where('assignedTo', '==', selectedClinic));
                     unsubItems = onSnapshot(itemsQuery, itemsSnapshot => {
                         const actionItems = itemsSnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
                         
@@ -457,7 +458,7 @@
 
             // Load initial data
             if (isEditMode) {
-                const docRef = doc(AppState.db, `artifacts/${__app_id}/users/${AppState.userId}/meetings`, AppState.currentMeetingId);
+                const docRef = doc(AppState.db, `artifacts/${AppState.appId}/users/${AppState.userId}/meetings`, AppState.currentMeetingId);
                 const docSnap = await getDoc(docRef);
                 if (docSnap.exists()) {
                     const data = docSnap.data();
@@ -466,7 +467,7 @@
                     formState.discussionPoints = data.discussionPoints || '- ';
                     formState.clinicUpdates = data.clinicUpdates || {};
 
-                    const q = query(collection(AppState.db, `artifacts/${__app_id}/users/${AppState.userId}/actionItems`), where("meetingId", "==", AppState.currentMeetingId));
+                    const q = query(collection(AppState.db, `artifacts/${AppState.appId}/users/${AppState.userId}/actionItems`), where("meetingId", "==", AppState.currentMeetingId));
                     const snapshot = await getDocs(q);
                     const items = snapshot.docs.map(d => ({ id: d.id, ...d.data() }));
                     formState.localActionItems = items;
@@ -474,7 +475,7 @@
                 }
             } else {
                 // For new meetings, carry over open action items
-                const q = query(collection(AppState.db, `artifacts/${__app_id}/users/${AppState.userId}/actionItems`), where('status', '!=', 'Done'));
+                const q = query(collection(AppState.db, `artifacts/${AppState.appId}/users/${AppState.userId}/actionItems`), where('status', '!=', 'Done'));
                 const snapshot = await getDocs(q);
                 const items = snapshot.docs.map(d => ({ id: d.id, ...d.data() }));
                 formState.localActionItems = items;
@@ -626,7 +627,7 @@
                     break;
                 case 'edit-action-item':
                     {
-                        const itemRef = doc(AppState.db, `artifacts/${__app_id}/users/${AppState.userId}/actionItems`, id);
+                        const itemRef = doc(AppState.db, `artifacts/${AppState.appId}/users/${AppState.userId}/actionItems`, id);
                         const itemSnap = await getDoc(itemRef);
                         if (itemSnap.exists()) {
                             showActionItemFormModal({ selectedActionItem: {id, ...itemSnap.data()}, meetingId: AppState.currentMeetingId });
@@ -671,37 +672,37 @@
                 if (isEditMode) {
                     const meetingId = AppState.currentMeetingId;
                     const batch = writeBatch(AppState.db);
-                    const meetingRef = doc(AppState.db, `artifacts/${__app_id}/users/${AppState.userId}/meetings`, meetingId);
+                    const meetingRef = doc(AppState.db, `artifacts/${AppState.appId}/users/${AppState.userId}/meetings`, meetingId);
                     batch.update(meetingRef, meetingData);
 
                     formState.localActionItems.forEach(item => {
                         const isExisting = formState.initialActionItems.some(initial => initial.id === item.id);
                         const { id, ...itemData } = item;
                         if (isExisting) {
-                            batch.update(doc(AppState.db, `artifacts/${__app_id}/users/${AppState.userId}/actionItems`, id), itemData);
+                            batch.update(doc(AppState.db, `artifacts/${AppState.appId}/users/${AppState.userId}/actionItems`, id), itemData);
                         } else {
-                            const newItemRef = doc(collection(AppState.db, `artifacts/${__app_id}/users/${AppState.userId}/actionItems`));
+                            const newItemRef = doc(collection(AppState.db, `artifacts/${AppState.appId}/users/${AppState.userId}/actionItems`));
                             batch.set(newItemRef, { ...itemData, meetingId, createdAt: serverTimestamp() });
                         }
                     });
 
                     const deletedItemIds = formState.initialActionItems.filter(initial => !formState.localActionItems.some(local => local.id === initial.id)).map(item => item.id);
                     deletedItemIds.forEach(id => {
-                        batch.delete(doc(AppState.db, `artifacts/${__app_id}/users/${AppState.userId}/actionItems`, id));
+                        batch.delete(doc(AppState.db, `artifacts/${AppState.appId}/users/${AppState.userId}/actionItems`, id));
                     });
 
                     await batch.commit();
                     navigateTo('meeting-detail', meetingId);
                 } else {
-                    const docRef = await addDoc(collection(AppState.db, `artifacts/${__app_id}/users/${AppState.userId}/meetings`), { ...meetingData, createdAt: serverTimestamp() });
+                    const docRef = await addDoc(collection(AppState.db, `artifacts/${AppState.appId}/users/${AppState.userId}/meetings`), { ...meetingData, createdAt: serverTimestamp() });
                     const newMeetingId = docRef.id;
                     const batch = writeBatch(AppState.db);
                     
                     formState.localActionItems.forEach(item => {
                         if (item.createdAt) { // It's an existing item carried over
-                            batch.update(doc(AppState.db, `artifacts/${__app_id}/users/${AppState.userId}/actionItems`, item.id), { meetingId: newMeetingId });
+                            batch.update(doc(AppState.db, `artifacts/${AppState.appId}/users/${AppState.userId}/actionItems`, item.id), { meetingId: newMeetingId });
                         } else { // It's a new item created in the form
-                            const newItemRef = doc(collection(AppState.db, `artifacts/${__app_id}/users/${AppState.userId}/actionItems`));
+                            const newItemRef = doc(collection(AppState.db, `artifacts/${AppState.appId}/users/${AppState.userId}/actionItems`));
                             const { id, ...itemDataToSave } = item;
                             batch.set(newItemRef, { ...itemDataToSave, meetingId: newMeetingId, createdAt: serverTimestamp() });
                         }
@@ -730,10 +731,10 @@
             if (!AppState.db || !AppState.userId || !meetingId) return;
             try {
                 const batch = writeBatch(AppState.db);
-                const itemsQuery = query(collection(AppState.db, `artifacts/${__app_id}/users/${AppState.userId}/actionItems`), where("meetingId", "==", meetingId));
+                const itemsQuery = query(collection(AppState.db, `artifacts/${AppState.appId}/users/${AppState.userId}/actionItems`), where("meetingId", "==", meetingId));
                 const itemsSnapshot = await getDocs(itemsQuery);
                 itemsSnapshot.forEach(doc => batch.delete(doc.ref));
-                batch.delete(doc(AppState.db, `artifacts/${__app_id}/users/${AppState.userId}/meetings`, meetingId));
+                batch.delete(doc(AppState.db, `artifacts/${AppState.appId}/users/${AppState.userId}/meetings`, meetingId));
                 await batch.commit();
                 navigateTo('meetings');
             } catch (err) {
@@ -745,7 +746,7 @@
         async function handleDeleteActionItem(itemId) {
             if (!AppState.db || !AppState.userId || !itemId) return;
             try {
-                await deleteDoc(doc(AppState.db, `artifacts/${__app_id}/users/${AppState.userId}/actionItems`, itemId));
+                await deleteDoc(doc(AppState.db, `artifacts/${AppState.appId}/users/${AppState.userId}/actionItems`, itemId));
             } catch (err) {
                 console.error("Error deleting action item:", err);
                 alert("Gagal menghapus item tindakan.");
@@ -895,9 +896,9 @@
                 } else if (meetingId) {
                     const { id, ...itemData } = finalItem;
                     if (isEditMode) {
-                        await updateDoc(doc(AppState.db, `artifacts/${__app_id}/users/${AppState.userId}/actionItems`, id), {...itemData, updatedAt: serverTimestamp()});
+                        await updateDoc(doc(AppState.db, `artifacts/${AppState.appId}/users/${AppState.userId}/actionItems`, id), {...itemData, updatedAt: serverTimestamp()});
                     } else {
-                        await addDoc(collection(AppState.db, `artifacts/${__app_id}/users/${AppState.userId}/actionItems`), {...itemData, meetingId, createdAt: serverTimestamp()});
+                        await addDoc(collection(AppState.db, `artifacts/${AppState.appId}/users/${AppState.userId}/actionItems`), {...itemData, meetingId, createdAt: serverTimestamp()});
                     }
                 }
                 modalElement.remove();
@@ -911,8 +912,8 @@
             if (!AppState.db || !AppState.userId) { alert("Firebase belum siap."); return; }
             if (typeof XLSX === 'undefined') { alert("Pustaka Excel belum dimuat."); return; }
             try {
-                const meetingsSnapshot = await getDocs(collection(AppState.db, `artifacts/${__app_id}/users/${AppState.userId}/meetings`));
-                const actionItemsSnapshot = await getDocs(collection(AppState.db, `artifacts/${__app_id}/users/${AppState.userId}/actionItems`));
+                const meetingsSnapshot = await getDocs(collection(AppState.db, `artifacts/${AppState.appId}/users/${AppState.userId}/meetings`));
+                const actionItemsSnapshot = await getDocs(collection(AppState.db, `artifacts/${AppState.appId}/users/${AppState.userId}/actionItems`));
                 const meetingsData = meetingsSnapshot.docs.map(doc => { const m = doc.data(); return { "ID Meeting": doc.id, "Judul": m.title, "Tanggal": m.date ? formatDisplayDate(m.date, { year: 'numeric', month: 'long', day: 'numeric' }) : '', "Peserta": m.participants?.join(', '), "Pembaruan Klinik": Object.entries(m.clinicUpdates || {}).map(([c, u]) => `${c}: ${u}`).join('\n'), "Diskusi Umum": m.discussionPoints, }; });
                 const actionItemsData = actionItemsSnapshot.docs.map(doc => { const item = doc.data(); return { "ID Item": doc.id, "ID Meeting Terkait": item.meetingId, "Judul": item.title, "Ditugaskan Kepada": item.assignedTo, "Batas Waktu": item.dueDate ? formatShortDisplayDate(item.dueDate) : '', "Status": item.status, "Follow-ups": item.followUps?.map(f => `${formatShortDisplayDate(f.followUpDate)}: ${f.followUpDetail}`).join('\n') }; });
                 const meetingsSheet = XLSX.utils.json_to_sheet(meetingsData);
@@ -958,7 +959,8 @@
 
         async function initializeFirebase() {
             try {
-                const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
+                // This logic handles both the special environment and local/GitHub Pages deployment.
+                AppState.appId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
                 
                 let firebaseConfig;
                 if (typeof __firebase_config !== 'undefined' && __firebase_config) {
