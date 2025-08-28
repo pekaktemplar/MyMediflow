@@ -48,7 +48,15 @@
     <script type="module">
         // Import necessary functions from the Firebase SDK
         import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
-        import { getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
+        import { 
+            getAuth, 
+            signInAnonymously, 
+            signInWithCustomToken, 
+            onAuthStateChanged,
+            GoogleAuthProvider,
+            signInWithPopup,
+            signOut
+        } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
         import { 
             getFirestore, collection, doc, addDoc, setDoc, getDoc, updateDoc, 
             deleteDoc, onSnapshot, query, where, serverTimestamp, writeBatch, getDocs
@@ -119,7 +127,27 @@
         const ErrorDisplay = (message) => `
             <div class="flex items-center justify-center min-h-screen text-xl text-red-600"><p>${message}</p></div>`;
         
-        const Header = () => `
+        const Header = () => {
+            const user = AppState.auth.currentUser;
+            let authDisplay;
+
+            if (user && !user.isAnonymous) {
+                // User is logged in with Google
+                authDisplay = `
+                    <span class="font-medium truncate max-w-[150px] hidden sm:inline">${user.displayName || 'User'}</span>
+                    <button data-action="logout" class="px-3 py-1 text-sm text-white bg-red-500 rounded-md hover:bg-red-600">Logout</button>
+                `;
+            } else {
+                // User is anonymous or logged out
+                authDisplay = `
+                    <button data-action="login-google" class="px-4 py-2 text-sm text-white bg-green-500 rounded-md hover:bg-green-600">
+                        <svg class="inline w-4 h-4 mr-2" aria-hidden="true" focusable="false" data-prefix="fab" data-icon="google" role="img" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 488 512"><path fill="currentColor" d="M488 261.8C488 403.3 391.1 504 248 504 110.8 504 0 393.2 0 256S110.8 8 248 8c66.8 0 126 23.4 172.9 62.3l-66.5 64.6C305.5 102.2 279.5 96 248 96c-88.8 0-160.1 71.1-160.1 160s71.3 160 160.1 160c97.4 0 134-60.1 140.8-92.2H248v-70.1h239.9c2.5 12.7 3.9 26.1 3.9 40z"></path></svg>
+                        Login with Google
+                    </button>
+                `;
+            }
+
+            return `
             <header class="flex items-center justify-between p-4 bg-blue-600 shadow-md">
                 <h1 class="text-3xl font-bold text-white cursor-pointer" data-action="navigate" data-page="dashboard">Mediflow</h1>
                 <nav class="hidden md:flex items-center space-x-2">
@@ -130,10 +158,11 @@
                     <button data-action="export-excel" class="px-4 py-2 text-white transition-colors duration-200 bg-green-500 rounded-md hover:bg-green-600">Export Excel</button>
                 </nav>
                 <div class="flex items-center space-x-2 text-sm text-white">
-                    <span class="font-medium">User ID:</span>
-                    <span class="px-2 py-1 text-xs truncate bg-blue-700 rounded-md max-w-[100px] md:max-w-xs">${AppState.userId}</span>
+                    ${authDisplay}
                 </div>
             </header>`;
+        }
+
 
         const MeetingCard = (meeting) => `
             <div class="p-4 bg-white rounded-lg shadow-md">
@@ -542,6 +571,29 @@
             window.renderLocalActionItems = renderActionItems;
         }
 
+        // --- AUTHENTICATION FUNCTIONS ---
+
+        async function signInWithGoogle() {
+            const provider = new GoogleAuthProvider();
+            try {
+                await signInWithPopup(AppState.auth, provider);
+                // onAuthStateChanged will handle the UI update
+            } catch (error) {
+                console.error("Error signing in with Google:", error);
+                alert("Gagal login dengan Google. Silakan coba lagi.");
+            }
+        }
+
+        async function signOutUser() {
+            try {
+                await signOut(AppState.auth);
+                // onAuthStateChanged will handle signing in anonymously and updating the UI
+            } catch (error) {
+                console.error("Error signing out:", error);
+                alert("Gagal logout.");
+            }
+        }
+
         // --- EVENT HANDLERS & ACTIONS ---
         
         appRoot.addEventListener('click', async (e) => {
@@ -556,6 +608,12 @@
             switch (action) {
                 case 'navigate':
                     navigateTo(page, id);
+                    break;
+                case 'login-google':
+                    await signInWithGoogle();
+                    break;
+                case 'logout':
+                    await signOutUser();
                     break;
                 case 'export-excel':
                     exportAllDataToExcel();
@@ -902,22 +960,18 @@
             try {
                 const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
                 
-                // Cek apakah variabel global __firebase_config sudah ada
                 let firebaseConfig;
                 if (typeof __firebase_config !== 'undefined' && __firebase_config) {
                     firebaseConfig = JSON.parse(__firebase_config);
                 } else {
-                    // --- PASTE KONFIGURASI FIREBASE ANDA DI SINI ---
-                    // Ganti objek kosong ini dengan konfigurasi dari Firebase Console Anda
                     firebaseConfig = {
-                        apiKey: "AIzaSyBNE8gS-WYTJRhdCN74dpSYsMS3ZHlJfyQ",
-                        authDomain: "mymediflow.firebaseapp.com",
-                        projectId: "mymediflow",
-                        storageBucket: "mymediflow.firebasestorage.app",
-                        messagingSenderId: "689175078659",
-                        appId: "1:689175078659:web:877bf409714d2d74216b36"
+                        apiKey: "AIzaSyChAi6kfETyfENB78FAhDFrC_VHDWDRVXs",
+                        authDomain: "mymeeting-8c4b4.firebaseapp.com",
+                        projectId: "mymeeting-8c4b4",
+                        storageBucket: "mymeeting-8c4b4.firebasestorage.app",
+                        messagingSenderId: "402496368645",
+                        appId: "1:402496368645:web:6c86ab221cee6d1ee4ac6c"
                     };
-                    // ----------------------------------------------------
                 }
 
                 const initialAuthToken = typeof __initial_auth_token !== 'undefined' ? __initial_auth_token : null;
@@ -928,15 +982,21 @@
 
                 onAuthStateChanged(AppState.auth, async (user) => {
                     if (user) {
+                        // User is signed in (either with Google or anonymously)
                         AppState.userId = user.uid;
                     } else {
-                        if (initialAuthToken) {
-                            await signInWithCustomToken(AppState.auth, initialAuthToken);
-                        } else {
-                            await signInAnonymously(AppState.auth);
-                        }
+                        // User is signed out, so sign them in anonymously to allow app usage
+                        await signInAnonymously(AppState.auth);
+                        // This will trigger onAuthStateChanged again with the new anonymous user, so we exit here.
+                        return; 
                     }
-                    AppState.loading = false;
+                    
+                    // If loading was true, it means this is the first auth check.
+                    if(AppState.loading) {
+                        AppState.loading = false;
+                    }
+                    
+                    // Re-render the app to reflect the new user state and their data
                     renderApp();
                 });
             } catch (err) {
