@@ -1,0 +1,955 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Mediflow - Meeting Management</title>
+    <!-- Tailwind CSS for styling -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- SheetJS (xlsx) for Excel export functionality -->
+    <script src="https://cdn.sheetjs.com/xlsx-0.20.2/package/dist/xlsx.full.min.js"></script>
+    <style>
+        /* Custom scrollbar for a better look in modals and textareas */
+        ::-webkit-scrollbar {
+            width: 8px;
+        }
+        ::-webkit-scrollbar-track {
+            background: #f1f1f1;
+            border-radius: 10px;
+        }
+        ::-webkit-scrollbar-thumb {
+            background: #888;
+            border-radius: 10px;
+        }
+        ::-webkit-scrollbar-thumb:hover {
+            background: #555;
+        }
+        /* Style to hide elements */
+        .hidden {
+            display: none;
+        }
+    </style>
+</head>
+<body class="bg-gray-100 font-sans antialiased">
+
+    <!-- Main application container -->
+    <div id="app-root">
+        <!-- The header will be rendered here by JavaScript -->
+        <header id="app-header"></header>
+        <!-- The main page content will be rendered here by JavaScript -->
+        <main id="app-main"></main>
+    </div>
+    
+    <!-- Container for modals -->
+    <div id="modal-container"></div>
+
+
+    <!-- JavaScript module for the application logic -->
+    <script type="module">
+        // Import necessary functions from the Firebase SDK
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
+        import { getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
+        import { 
+            getFirestore, collection, doc, addDoc, setDoc, getDoc, updateDoc, 
+            deleteDoc, onSnapshot, query, where, serverTimestamp, writeBatch, getDocs
+        } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+
+        // --- GLOBAL APP STATE AND CONFIG ---
+
+        // App state holds all the necessary global variables for the application
+        const AppState = {
+            db: null,
+            auth: null,
+            userId: null,
+            loading: true,
+            error: null,
+            currentPage: 'dashboard',
+            currentMeetingId: null,
+            clinics: ['Mataram', 'Maluk', 'Bali', 'Surabaya', 'Yogyakarta', 'Semarang'],
+            // To manage listeners and prevent memory leaks
+            listeners: [], 
+        };
+        
+        // DOM elements
+        const appHeader = document.getElementById('app-header');
+        const appMain = document.getElementById('app-main');
+        const appRoot = document.getElementById('app-root');
+        const modalContainer = document.getElementById('modal-container');
+
+        // --- HELPER FUNCTIONS ---
+
+        const formatDisplayDate = (dateString, options = { year: 'numeric', month: 'long', day: 'numeric', hour: '2-digit', minute: '2-digit' }) => {
+            if (!dateString) return 'Tidak tersedia';
+            const dateObj = new Date(dateString);
+            if (isNaN(dateObj.getTime())) return 'Tanggal tidak valid';
+            return dateObj.toLocaleDateString('id-ID', options);
+        };
+
+        const formatShortDisplayDate = (dateString) => {
+            if (!dateString) return '';
+            const dateObj = new Date(dateString);
+            if (isNaN(dateObj.getTime())) return '';
+            return dateObj.toISOString().split('T')[0];
+        };
+
+        const getStatusClasses = (status) => {
+            switch (status) {
+                case 'Done': return 'bg-green-100 text-green-800 border-green-300';
+                case 'In Progress': return 'bg-yellow-100 text-yellow-800 border-yellow-300';
+                default: return 'bg-gray-100 text-gray-800 border-gray-300';
+            }
+        };
+        
+        /**
+         * Cleans up all active Firestore listeners.
+         */
+        function cleanupListeners() {
+            AppState.listeners.forEach(unsubscribe => unsubscribe());
+            AppState.listeners = [];
+        }
+
+        // --- UI COMPONENT FUNCTIONS (TEMPLATE GENERATORS) ---
+        
+        const LoadingSpinner = () => `
+            <div class="flex items-center justify-center min-h-screen bg-gray-100">
+                <div class="w-16 h-16 border-4 border-t-4 border-blue-500 border-solid rounded-full animate-spin"></div>
+                <p class="ml-4 text-gray-700">Memuat aplikasi...</p>
+            </div>`;
+
+        const ErrorDisplay = (message) => `
+            <div class="flex items-center justify-center min-h-screen text-xl text-red-600"><p>${message}</p></div>`;
+        
+        const Header = () => `
+            <header class="flex items-center justify-between p-4 bg-blue-600 shadow-md">
+                <h1 class="text-3xl font-bold text-white cursor-pointer" data-action="navigate" data-page="dashboard">Mediflow</h1>
+                <nav class="hidden md:flex items-center space-x-2">
+                    <button data-action="navigate" data-page="dashboard" class="px-4 py-2 text-white transition-colors duration-200 rounded-md hover:bg-blue-700">Dashboard</button>
+                    <button data-action="navigate" data-page="meetings" class="px-4 py-2 text-white transition-colors duration-200 rounded-md hover:bg-blue-700">Daftar Meeting</button>
+                    <button data-action="navigate" data-page="clinic-dashboard" class="px-4 py-2 text-white transition-colors duration-200 rounded-md hover:bg-blue-700">Dashboard Klinik</button>
+                    <button data-action="navigate" data-page="new-meeting" class="px-4 py-2 text-white transition-colors duration-200 bg-blue-500 rounded-md hover:bg-blue-700">+ Meeting Baru</button>
+                    <button data-action="export-excel" class="px-4 py-2 text-white transition-colors duration-200 bg-green-500 rounded-md hover:bg-green-600">Export Excel</button>
+                </nav>
+                <div class="flex items-center space-x-2 text-sm text-white">
+                    <span class="font-medium">User ID:</span>
+                    <span class="px-2 py-1 text-xs truncate bg-blue-700 rounded-md max-w-[100px] md:max-w-xs">${AppState.userId}</span>
+                </div>
+            </header>`;
+
+        const MeetingCard = (meeting) => `
+            <div class="p-4 bg-white rounded-lg shadow-md">
+                <h5 class="mb-2 text-xl font-semibold text-gray-900">${meeting.title}</h5>
+                <p class="text-sm text-gray-600">
+                    <span class="font-medium">Tanggal:</span> 
+                    ${formatDisplayDate(meeting.date, { year: 'numeric', month: 'long', day: 'numeric' })}
+                </p>
+                <button data-action="navigate" data-page="meeting-detail" data-id="${meeting.id}" class="px-4 py-2 mt-4 text-sm text-white bg-blue-600 rounded-md hover:bg-blue-700">
+                    Lihat Detail Meeting
+                </button>
+            </div>`;
+
+        const ActionItemListItem = (item, showControls = false, isLocal = false) => `
+            <li class="p-3 bg-white rounded-md shadow-sm">
+                <p class="font-medium text-gray-900">${item.title}</p>
+                <p class="text-xs text-gray-600">Ditugaskan ke: ${item.assignedTo}</p>
+                <p class="text-xs text-gray-600">Batas Waktu: ${formatShortDisplayDate(item.dueDate) || 'Tidak ada'}</p>
+                ${item.followUps && item.followUps.length > 0 ? `
+                    <div class="mt-2 text-xs text-gray-500">
+                        <span class="font-semibold">Follow-up:</span>
+                        <ul class="ml-4 list-disc list-inside">
+                            ${item.followUps.map(fu => `
+                                <li>
+                                    ${formatShortDisplayDate(fu.followUpDate)}:
+                                    ${fu.followUpDetail.split('\n').map(line => line.trim() ? `<p class="pl-4 text-sm text-gray-700">${line.trim().replace(/^- /, '')}</p>` : '').join('')}
+                                </li>
+                            `).join('')}
+                        </ul>
+                    </div>
+                ` : ''}
+                <div class="flex items-center justify-between mt-3">
+                    <div class="px-3 py-1 text-sm font-medium rounded-full ${getStatusClasses(item.status)}">${item.status}</div>
+                    ${showControls ? `
+                        <div class="space-x-2">
+                            <button data-action="${isLocal ? 'edit-local-action-item' : 'edit-action-item'}" data-id="${item.id}" class="text-blue-600 hover:text-blue-800" title="Edit Item Tindakan">
+                                <svg xmlns="http://www.w3.org/2000/svg" class="w-5 h-5 pointer-events-none" viewBox="0 0 20 20" fill="currentColor"><path d="M13.586 3.586a2 2 0 112.828 2.828l-.793.793-2.828-2.828.793-.793zM11.379 5.793L3 14.172V17h2.828l8.38-8.38-2.827-2.828z" /></svg>
+                            </button>
+                            <button data-action="${isLocal ? 'delete-local-action-item' : 'delete-action-item'}" data-id="${item.id}" class="text-red-600 hover:text-red-800" title="Hapus Item Tindakan">
+                                <svg xmlns="http://www.w3.org/2000/svg" class="w-5 h-5 pointer-events-none" viewBox="0 0 20 20" fill="currentColor"><path fill-rule="evenodd" d="M9 2a1 1 0 00-.894.553L7.382 4H4a1 1 0 000 2v10a2 2 0 002 2h8a2 2 0 002-2V6a1 1 0 100-2h-3.382l-.724-1.447A1 1 0 0011 2H9zM7 8a1 1 0 012 0v6a1 1 0 11-2 0V8zm5-1a1 1 0 00-1 1v6a1 1 0 102 0V8a1 1 0 00-1-1z" clip-rule="evenodd" /></svg>
+                            </button>
+                        </div>
+                    ` : ''}
+                </div>
+            </li>`;
+
+        // --- PAGE RENDERING FUNCTIONS ---
+        
+        async function renderDashboard() {
+            appMain.innerHTML = `<div class="p-6"><h2 class="mb-6 text-4xl font-extrabold text-gray-900">Dashboard</h2><div id="dashboard-content"></div></div>`;
+            const content = document.getElementById('dashboard-content');
+            
+            if (!AppState.db || !AppState.userId) return;
+
+            const meetingsSnapshot = await getDocs(query(collection(AppState.db, `artifacts/${__app_id}/users/${AppState.userId}/meetings`)));
+            const actionItemsSnapshot = await getDocs(query(collection(AppState.db, `artifacts/${__app_id}/users/${AppState.userId}/actionItems`)));
+            
+            const meetings = meetingsSnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+            const actionItems = actionItemsSnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+
+            const upcomingMeetings = meetings.filter(m => new Date(m.date) > new Date()).sort((a, b) => new Date(a.date) - new Date(b.date)).slice(0, 3);
+            const overdueActionItems = actionItems.filter(item => item.status !== 'Done' && item.dueDate && new Date(item.dueDate) < new Date());
+            const pendingActionItems = actionItems.filter(item => item.status === 'Open' || item.status === 'In Progress');
+
+            content.innerHTML = `
+                <div class="grid grid-cols-1 gap-6 mb-8 md:grid-cols-3">
+                    <div class="p-6 bg-white rounded-lg shadow-lg"><h3 class="mb-2 text-lg font-semibold text-gray-700">Total Meeting</h3><p class="text-5xl font-bold text-blue-600">${meetings.length}</p></div>
+                    <div class="p-6 bg-white rounded-lg shadow-lg"><h3 class="mb-2 text-lg font-semibold text-gray-700">Item Tindakan Terbuka</h3><p class="text-5xl font-bold text-yellow-600">${pendingActionItems.length}</p></div>
+                    <div class="p-6 bg-white rounded-lg shadow-lg"><h3 class="mb-2 text-lg font-semibold text-gray-700">Item Tindakan Lewat Batas</h3><p class="text-5xl font-bold text-red-600">${overdueActionItems.length}</p></div>
+                </div>
+                <section class="mb-8">
+                    <h3 class="mb-4 text-2xl font-bold text-gray-800">Meeting Mendatang</h3>
+                    ${upcomingMeetings.length > 0 ? `<div class="grid grid-cols-1 gap-4 md:grid-cols-2 lg:grid-cols-3">${upcomingMeetings.map(MeetingCard).join('')}</div>` : `<p class="text-gray-600">Tidak ada meeting yang akan datang.</p>`}
+                </section>
+                <section>
+                    <h3 class="mb-4 text-2xl font-bold text-gray-800">Item Tindakan Lewat Batas Waktu</h3>
+                    ${overdueActionItems.length > 0 ? `<div class="grid grid-cols-1 gap-4 md:grid-cols-2 lg:grid-cols-3">${overdueActionItems.map(item => `
+                                <div class="p-4 bg-red-100 rounded-lg shadow-md">
+                                    <h4 class="mb-1 text-xl font-semibold text-red-800">${item.title}</h4>
+                                    <p class="text-sm text-red-700">Ditugaskan ke: <span class="font-medium">${item.assignedTo}</span></p>
+                                    <p class="text-sm text-red-700">Batas Waktu: <span class="font-medium">${formatShortDisplayDate(item.dueDate)}</span></p>
+                                    <button data-action="navigate" data-page="meeting-detail" data-id="${item.meetingId}" class="px-4 py-2 mt-4 text-sm text-white bg-red-600 rounded-md hover:bg-red-700">Lihat Meeting</button>
+                                </div>`).join('')}</div>` : `<p class="text-gray-600">Tidak ada item tindakan yang melewati batas waktu.</p>`}
+                </section>`;
+        }
+        
+        function renderMeetingList() {
+            appMain.innerHTML = `
+                <div class="p-6">
+                    <h2 class="mb-6 text-4xl font-extrabold text-gray-900">Daftar Meeting</h2>
+                    <div class="flex flex-col gap-4 mb-6 md:flex-row">
+                        <input type="text" id="search-term" placeholder="Cari berdasarkan judul..." class="flex-grow px-4 py-2 bg-white border border-gray-300 rounded-md shadow-sm" />
+                        <select id="filter-clinic" class="w-full px-4 py-2 bg-white border border-gray-300 rounded-md shadow-sm md:w-auto">
+                            <option value="Semua">Semua Klinik</option>
+                            ${AppState.clinics.map(c => `<option value="${c}">${c}</option>`).join('')}
+                        </select>
+                        <button data-action="navigate" data-page="new-meeting" class="px-6 py-2 text-white bg-blue-600 rounded-md shadow-md md:ml-auto hover:bg-blue-700">+ Meeting Baru</button>
+                    </div>
+                    <div id="meeting-list-container" class="grid grid-cols-1 gap-4 md:grid-cols-2 lg:grid-cols-3"></div>
+                </div>`;
+
+            const container = document.getElementById('meeting-list-container');
+            const searchInput = document.getElementById('search-term');
+            const filterSelect = document.getElementById('filter-clinic');
+            let allMeetings = [];
+
+            const applyFilters = () => {
+                const searchTerm = searchInput.value.toLowerCase();
+                const filterClinic = filterSelect.value;
+                const filtered = allMeetings.filter(meeting => 
+                    (filterClinic === 'Semua' || (meeting.participants && meeting.participants.includes(filterClinic))) &&
+                    (searchTerm === '' || meeting.title.toLowerCase().includes(searchTerm))
+                );
+                container.innerHTML = filtered.length > 0 ? filtered.map(MeetingCard).join('') : `<p class="col-span-full p-4 text-center text-gray-600">Tidak ada meeting yang ditemukan.</p>`;
+            };
+
+            searchInput.addEventListener('input', applyFilters);
+            filterSelect.addEventListener('change', applyFilters);
+            
+            const q = query(collection(AppState.db, `artifacts/${__app_id}/users/${AppState.userId}/meetings`));
+            const unsubscribe = onSnapshot(q, (snapshot) => {
+                const meetingsData = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+                meetingsData.sort((a, b) => new Date(b.date) - new Date(a.date));
+                allMeetings = meetingsData;
+                applyFilters();
+            });
+            AppState.listeners.push(unsubscribe);
+        }
+
+        function renderMeetingDetail() {
+            appMain.innerHTML = LoadingSpinner();
+            if (!AppState.db || !AppState.userId || !AppState.currentMeetingId) return;
+
+            const meetingId = AppState.currentMeetingId;
+            const meetingRef = doc(AppState.db, `artifacts/${__app_id}/users/${AppState.userId}/meetings`, meetingId);
+            
+            const unsubMeeting = onSnapshot(meetingRef, (docSnap) => {
+                if (!docSnap.exists()) {
+                    appMain.innerHTML = ErrorDisplay("Meeting tidak ditemukan.");
+                    return;
+                }
+                const meeting = { id: docSnap.id, ...docSnap.data() };
+                
+                const actionItemsQuery = query(collection(AppState.db, `artifacts/${__app_id}/users/${AppState.userId}/actionItems`), where("meetingId", "==", meetingId));
+                const unsubItems = onSnapshot(actionItemsQuery, (snapshot) => {
+                    const actionItems = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+                    const groupedActionItems = actionItems.reduce((acc, item) => {
+                        const clinicName = item.assignedTo || 'Tidak Ditugaskan';
+                        if (!acc[clinicName]) acc[clinicName] = [];
+                        acc[clinicName].push(item);
+                        return acc;
+                    }, {});
+
+                    appMain.innerHTML = `
+                        <div class="p-6">
+                            <div class="flex items-center justify-between mb-6">
+                                <h2 class="text-4xl font-extrabold text-gray-900">${meeting.title}</h2>
+                                <div class="space-x-3">
+                                    <button data-action="navigate" data-page="edit-meeting" data-id="${meeting.id}" class="px-5 py-2 text-white bg-green-600 rounded-md hover:bg-green-700">Edit Meeting</button>
+                                    <button data-action="delete-meeting" data-id="${meeting.id}" class="px-5 py-2 text-white bg-red-600 rounded-md hover:bg-red-700">Hapus Meeting</button>
+                                </div>
+                            </div>
+                            <p class="mb-4 text-gray-700"><span class="font-semibold">Tanggal:</span> ${formatDisplayDate(meeting.date, { year: 'numeric', month: 'long', day: 'numeric' })}</p>
+                            <p class="mb-6 text-gray-700"><span class="font-semibold">Peserta:</span> ${meeting.participants?.join(', ')}</p>
+                            <div class="mb-8">
+                                <h3 class="mb-3 text-2xl font-bold text-gray-800">Pembaruan dari Klinik</h3>
+                                ${meeting.clinicUpdates && Object.keys(meeting.clinicUpdates).length > 0 ? `<ul class="grid grid-cols-1 gap-4 md:grid-cols-2 lg:grid-cols-3">${Object.entries(meeting.clinicUpdates).map(([clinic, update]) => `<li class="p-4 bg-gray-100 rounded-md"><span class="font-semibold">${clinic}:</span><ul class="ml-4 list-disc list-inside">${update.split('\n').map(line => line.trim() ? `<li>${line.trim().replace(/^- /, '')}</li>` : '').join('')}</ul></li>`).join('')}</ul>` : `<p class="text-gray-600">Tidak ada pembaruan klinik.</p>`}
+                            </div>
+                            <div class="mb-8">
+                                <h3 class="mb-3 text-2xl font-bold text-gray-800">Diskusi Umum</h3>
+                                <div class="p-4 bg-gray-100 rounded-md whitespace-pre-wrap">${meeting.discussionPoints.split('\n').map(line => line.trim() ? `<p>${line}</p>` : '').join('')}</div>
+                            </div>
+                            <div class="mb-8">
+                                <div class="flex items-center justify-between mb-4">
+                                    <h3 class="text-2xl font-bold text-gray-800">Item Tindakan</h3>
+                                    <button data-action="add-action-item" class="px-5 py-2 text-white bg-blue-600 rounded-md hover:bg-blue-700">+ Item Tindakan Baru</button>
+                                </div>
+                                ${actionItems.length === 0 ? `<p class="text-gray-600">Tidak ada item tindakan.</p>` : `<div class="space-y-6">${Object.entries(groupedActionItems).map(([clinicName, items]) => `<div class="p-4 border rounded-lg"><h4 class="mb-3 text-xl font-semibold text-gray-900">Klinik: ${clinicName}</h4><ul class="grid grid-cols-1 gap-4 md:grid-cols-2 lg:grid-cols-3">${items.map(item => ActionItemListItem(item, true)).join('')}</ul></div>`).join('')}</div>`}
+                            </div>
+                        </div>`;
+                });
+                AppState.listeners.push(unsubItems);
+            });
+            AppState.listeners.push(unsubMeeting);
+        }
+        
+        function renderClinicDashboard() {
+            appMain.innerHTML = `
+                <div class="p-6">
+                    <h2 class="mb-6 text-4xl font-extrabold text-gray-900">Dashboard Klinik</h2>
+                    <div class="mb-8">
+                        <label for="clinic-select" class="block mb-2 text-lg font-medium">Pilih Klinik:</label>
+                        <select id="clinic-select" class="w-full max-w-sm px-4 py-2 bg-white border rounded-md shadow-sm">
+                            ${AppState.clinics.map(c => `<option value="${c}">${c}</option>`).join('')}
+                        </select>
+                    </div>
+                    <div id="clinic-dashboard-content" class="mt-8"></div>
+                </div>`;
+
+            const content = document.getElementById('clinic-dashboard-content');
+            const clinicSelect = document.getElementById('clinic-select');
+            
+            let unsubMeetings, unsubItems;
+
+            const updateDashboard = (selectedClinic) => {
+                if (unsubMeetings) unsubMeetings();
+                if (unsubItems) unsubItems();
+                
+                content.innerHTML = LoadingSpinner();
+
+                const meetingsQuery = query(collection(AppState.db, `artifacts/${__app_id}/users/${AppState.userId}/meetings`), where('participants', 'array-contains', selectedClinic));
+                unsubMeetings = onSnapshot(meetingsQuery, meetingsSnapshot => {
+                    const meetings = meetingsSnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })).sort((a, b) => new Date(b.date) - new Date(a.date));
+
+                    const itemsQuery = query(collection(AppState.db, `artifacts/${__app_id}/users/${AppState.userId}/actionItems`), where('assignedTo', '==', selectedClinic));
+                    unsubItems = onSnapshot(itemsQuery, itemsSnapshot => {
+                        const actionItems = itemsSnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+                        
+                        const openItems = actionItems.filter(item => item.status === 'Open');
+                        const inProgressItems = actionItems.filter(item => item.status === 'In Progress');
+                        const doneItems = actionItems.filter(item => item.status === 'Done');
+                        const overdueItems = actionItems.filter(item => item.status !== 'Done' && item.dueDate && new Date(item.dueDate) < new Date());
+
+                        content.innerHTML = `
+                            <h3 class="mb-6 text-3xl font-bold text-gray-800">Detail untuk ${selectedClinic}</h3>
+                            <div class="grid grid-cols-1 gap-6 mb-8 md:grid-cols-4 text-center">
+                                <div class="p-6 bg-white rounded-lg shadow-lg"><h4 class="mb-2 text-lg font-semibold">Total Item</h4><p class="text-5xl font-bold text-blue-600">${actionItems.length}</p></div>
+                                <div class="p-6 bg-white rounded-lg shadow-lg"><h4 class="mb-2 text-lg font-semibold">Terbuka</h4><p class="text-5xl font-bold text-yellow-600">${openItems.length}</p></div>
+                                <div class="p-6 bg-white rounded-lg shadow-lg"><h4 class="mb-2 text-lg font-semibold">Selesai</h4><p class="text-5xl font-bold text-green-600">${doneItems.length}</p></div>
+                                <div class="p-6 bg-white rounded-lg shadow-lg"><h4 class="mb-2 text-lg font-semibold">Lewat Batas</h4><p class="text-5xl font-bold text-red-600">${overdueItems.length}</p></div>
+                            </div>
+                            <section class="mb-8">
+                                <h4 class="mb-4 text-2xl font-bold">Meeting Terkait</h4>
+                                ${meetings.length > 0 ? `<div class="grid grid-cols-1 gap-4 md:grid-cols-2">${meetings.map(MeetingCard).join('')}</div>` : `<p>Tidak ada meeting yang melibatkan ${selectedClinic}.</p>`}
+                            </section>
+                            <section>
+                                <h4 class="mb-4 text-2xl font-bold">Item Tindakan untuk ${selectedClinic}</h4>
+                                ${actionItems.length > 0 ? `<div class="grid grid-cols-1 gap-4 md:grid-cols-2 lg:grid-cols-3">
+                                    <div class="p-4 bg-gray-50 rounded-lg shadow-inner"><h5 class="mb-3 text-xl font-semibold">Open (${openItems.length})</h5><ul class="space-y-2">${openItems.map(item => ActionItemListItem(item)).join('')}</ul></div>
+                                    <div class="p-4 bg-gray-50 rounded-lg shadow-inner"><h5 class="mb-3 text-xl font-semibold">In Progress (${inProgressItems.length})</h5><ul class="space-y-2">${inProgressItems.map(item => ActionItemListItem(item)).join('')}</ul></div>
+                                    <div class="p-4 bg-gray-50 rounded-lg shadow-inner"><h5 class="mb-3 text-xl font-semibold">Done (${doneItems.length})</h5><ul class="space-y-2">${doneItems.map(item => ActionItemListItem(item)).join('')}</ul></div>
+                                </div>` : `<p>Tidak ada item tindakan untuk ${selectedClinic}.</p>`}
+                            </section>
+                        `;
+                    });
+                    AppState.listeners.push(unsubItems);
+                });
+                AppState.listeners.push(unsubMeetings);
+            };
+            
+            clinicSelect.addEventListener('change', (e) => updateDashboard(e.target.value));
+            // Initial load
+            updateDashboard(clinicSelect.value);
+        }
+
+        async function renderMeetingForm() {
+            const isEditMode = !!AppState.currentMeetingId;
+            appMain.innerHTML = LoadingSpinner();
+
+            // Local state for the form
+            let formState = {
+                date: '',
+                title: '',
+                participants: [],
+                discussionPoints: '- ',
+                clinicUpdates: {},
+                localActionItems: [],
+                initialActionItems: [] // To track deletions in edit mode
+            };
+
+            const updateTitle = () => {
+                const titleEl = document.getElementById('auto-title');
+                if (formState.date) {
+                    const dateObj = new Date(formState.date);
+                    if (!isNaN(dateObj.getTime())) {
+                        formState.title = `Meeting ${dateObj.toLocaleDateString('id-ID', { year: 'numeric', month: 'long', day: 'numeric' })}`;
+                    }
+                } else {
+                    formState.title = '';
+                }
+                if(titleEl) titleEl.textContent = formState.title || 'Pilih tanggal untuk membuat judul';
+            };
+
+            const renderActionItems = () => {
+                const container = document.getElementById('local-action-items-container');
+                if (container) {
+                    container.innerHTML = formState.localActionItems.length > 0 ? `
+                        <h3 class="mb-3 text-xl font-bold text-gray-800">${isEditMode ? 'Item Tindakan' : 'Item Tindakan yang Dibawa'}</h3>
+                        <ul class="space-y-2">${formState.localActionItems.map(item => ActionItemListItem(item, true, true)).join('')}</ul>` : '';
+                }
+            };
+
+            // Load initial data
+            if (isEditMode) {
+                const docRef = doc(AppState.db, `artifacts/${__app_id}/users/${AppState.userId}/meetings`, AppState.currentMeetingId);
+                const docSnap = await getDoc(docRef);
+                if (docSnap.exists()) {
+                    const data = docSnap.data();
+                    formState.date = formatShortDisplayDate(data.date) || '';
+                    formState.participants = data.participants || [];
+                    formState.discussionPoints = data.discussionPoints || '- ';
+                    formState.clinicUpdates = data.clinicUpdates || {};
+
+                    const q = query(collection(AppState.db, `artifacts/${__app_id}/users/${AppState.userId}/actionItems`), where("meetingId", "==", AppState.currentMeetingId));
+                    const snapshot = await getDocs(q);
+                    const items = snapshot.docs.map(d => ({ id: d.id, ...d.data() }));
+                    formState.localActionItems = items;
+                    formState.initialActionItems = JSON.parse(JSON.stringify(items)); // Deep copy
+                }
+            } else {
+                // For new meetings, carry over open action items
+                const q = query(collection(AppState.db, `artifacts/${__app_id}/users/${AppState.userId}/actionItems`), where('status', '!=', 'Done'));
+                const snapshot = await getDocs(q);
+                const items = snapshot.docs.map(d => ({ id: d.id, ...d.data() }));
+                formState.localActionItems = items;
+                formState.initialActionItems = JSON.parse(JSON.stringify(items));
+            }
+            
+            // Render the form HTML
+            appMain.innerHTML = `
+                <div class="p-6">
+                    <h2 class="mb-6 text-4xl font-extrabold text-gray-900">${isEditMode ? 'Edit Meeting' : 'Meeting Baru'}</h2>
+                    <form id="meeting-form" class="p-8 bg-white rounded-lg shadow-xl">
+                        <div class="mb-6">
+                            <label for="date" class="block mb-2 text-sm font-medium text-gray-700">Tanggal Meeting</label>
+                            <input type="date" id="date" value="${formState.date}" class="w-full px-4 py-2 bg-gray-50 border border-gray-300 rounded-md" required />
+                        </div>
+                        <div class="mb-6">
+                            <label class="block mb-2 text-sm font-medium text-gray-700">Judul Meeting Otomatis</label>
+                            <p id="auto-title" class="w-full px-4 py-2 bg-gray-100 border rounded-md"></p>
+                        </div>
+                        <div class="mb-6">
+                            <label class="block mb-2 text-sm font-medium text-gray-700">Peserta</label>
+                            <div id="participants-container" class="grid grid-cols-2 gap-2 md:grid-cols-3">
+                                <div class="flex items-center"><input type="checkbox" id="participant-all" class="w-4 h-4 text-blue-600 rounded" /><label for="participant-all" class="ml-2">Semua</label></div>
+                                ${AppState.clinics.map(c => `<div class="flex items-center"><input type="checkbox" id="p-${c}" data-clinic="${c}" class="w-4 h-4 text-blue-600 rounded participant-checkbox" ${formState.participants.includes(c) ? 'checked' : ''} /><label for="p-${c}" class="ml-2">${c}</label></div>`).join('')}
+                            </div>
+                        </div>
+                        <div class="mb-6">
+                            <label class="block mb-2 text-sm font-medium text-gray-700">Pembaruan dari Klinik</label>
+                            <div class="space-y-3">
+                                ${AppState.clinics.map(clinic => `
+                                    <div>
+                                        <label for="update-${clinic}" class="mb-1 text-sm font-medium">${clinic}:</label>
+                                        <div class="flex items-center space-x-2">
+                                            <textarea id="update-${clinic}" data-clinic="${clinic}" rows="2" class="clinic-update-textarea flex-grow px-4 py-2 bg-gray-50 border rounded-md" placeholder="Pembaruan untuk ${clinic}...">${formState.clinicUpdates[clinic] || '- '}</textarea>
+                                            <button type="button" data-action="add-local-action-item" data-clinic="${clinic}" class="px-3 py-2 text-sm text-white bg-blue-500 rounded-md hover:bg-blue-600" title="+ Item untuk ${clinic}">+ Item</button>
+                                        </div>
+                                    </div>
+                                `).join('')}
+                            </div>
+                        </div>
+                        <div id="local-action-items-container" class="p-4 mb-6 bg-gray-100 rounded-lg"></div>
+                        <div class="mb-6">
+                            <label for="discussionPoints" class="block mb-2 text-sm font-medium text-gray-700">Diskusi Umum</label>
+                            <textarea id="discussionPoints" rows="5" class="w-full px-4 py-2 bg-gray-50 border rounded-md" placeholder="Catat poin diskusi...">${formState.discussionPoints}</textarea>
+                        </div>
+                        <div class="flex justify-end space-x-4">
+                            <button type="button" data-action="navigate" data-page="${isEditMode ? 'meeting-detail' : 'meetings'}" data-id="${AppState.currentMeetingId || ''}" class="px-6 py-2 text-gray-700 bg-gray-200 rounded-md hover:bg-gray-300">Batal</button>
+                            <button type="submit" class="px-6 py-2 text-white bg-blue-600 rounded-md hover:bg-blue-700">${isEditMode ? 'Simpan Perubahan' : 'Buat Meeting'}</button>
+                        </div>
+                    </form>
+                </div>`;
+            
+            updateTitle();
+            renderActionItems();
+
+            // Add event listeners to the new form
+            const form = document.getElementById('meeting-form');
+            form.addEventListener('submit', (e) => handleMeetingFormSubmit(e, formState, isEditMode));
+            
+            document.getElementById('date').addEventListener('change', (e) => {
+                formState.date = e.target.value;
+                updateTitle();
+            });
+
+            document.getElementById('participant-all').addEventListener('change', (e) => {
+                const checkboxes = document.querySelectorAll('.participant-checkbox');
+                checkboxes.forEach(cb => cb.checked = e.target.checked);
+                formState.participants = e.target.checked ? [...AppState.clinics] : [];
+            });
+
+            document.querySelectorAll('.participant-checkbox').forEach(cb => {
+                cb.addEventListener('change', (e) => {
+                    const clinic = e.target.dataset.clinic;
+                    if (e.target.checked) {
+                        if (!formState.participants.includes(clinic)) formState.participants.push(clinic);
+                    } else {
+                        formState.participants = formState.participants.filter(p => p !== clinic);
+                    }
+                });
+            });
+
+            document.querySelectorAll('.clinic-update-textarea').forEach(ta => {
+                ta.addEventListener('input', (e) => {
+                    formState.clinicUpdates[e.target.dataset.clinic] = e.target.value;
+                });
+            });
+            
+            document.getElementById('discussionPoints').addEventListener('input', (e) => {
+                formState.discussionPoints = e.target.value;
+            });
+            
+            // Expose formState to be accessible by modal callbacks
+            window.currentMeetingFormState = formState;
+            window.renderLocalActionItems = renderActionItems;
+        }
+
+        // --- EVENT HANDLERS & ACTIONS ---
+        
+        appRoot.addEventListener('click', async (e) => {
+            const target = e.target.closest('[data-action]');
+            if (!target) return;
+
+            const action = target.dataset.action;
+            const id = target.dataset.id;
+            const page = target.dataset.page;
+            const clinic = target.dataset.clinic;
+
+            switch (action) {
+                case 'navigate':
+                    navigateTo(page, id);
+                    break;
+                case 'export-excel':
+                    exportAllDataToExcel();
+                    break;
+                case 'delete-meeting':
+                    showConfirmationModal("Konfirmasi Hapus Meeting", "Anda yakin ingin menghapus meeting ini dan semua item tindakannya? Tindakan ini tidak dapat dibatalkan.", () => handleDeleteMeeting(id));
+                    break;
+                case 'add-action-item':
+                    showActionItemFormModal({ meetingId: AppState.currentMeetingId });
+                    break;
+                case 'edit-action-item':
+                    {
+                        const itemRef = doc(AppState.db, `artifacts/${__app_id}/users/${AppState.userId}/actionItems`, id);
+                        const itemSnap = await getDoc(itemRef);
+                        if (itemSnap.exists()) {
+                            showActionItemFormModal({ selectedActionItem: {id, ...itemSnap.data()}, meetingId: AppState.currentMeetingId });
+                        }
+                    }
+                    break;
+                case 'delete-action-item':
+                    showConfirmationModal("Konfirmasi Hapus Item", "Anda yakin ingin menghapus item tindakan ini?", () => handleDeleteActionItem(id));
+                    break;
+                case 'add-local-action-item':
+                    showActionItemFormModal({ onSaveLocally: handleSaveLocallyActionItem, clinicToAssignAction: clinic });
+                    break;
+                case 'edit-local-action-item':
+                    {
+                        const itemToEdit = window.currentMeetingFormState.localActionItems.find(i => i.id.toString() === id);
+                        if(itemToEdit) showActionItemFormModal({ onSaveLocally: handleSaveLocallyActionItem, selectedActionItem: itemToEdit });
+                    }
+                    break;
+                case 'delete-local-action-item':
+                    showConfirmationModal("Konfirmasi Hapus Item", "Anda yakin ingin menghapus item tindakan ini dari daftar?", () => {
+                        window.currentMeetingFormState.localActionItems = window.currentMeetingFormState.localActionItems.filter(i => i.id.toString() !== id);
+                        window.renderLocalActionItems();
+                    });
+                    break;
+            }
+        });
+
+        async function handleMeetingFormSubmit(e, formState, isEditMode) {
+            e.preventDefault();
+            if (!AppState.db || !AppState.userId) return;
+
+            const meetingData = { 
+                title: formState.title, 
+                date: formState.date || null, 
+                participants: formState.participants, 
+                discussionPoints: formState.discussionPoints, 
+                clinicUpdates: formState.clinicUpdates, 
+                updatedAt: serverTimestamp() 
+            };
+
+            try {
+                if (isEditMode) {
+                    const meetingId = AppState.currentMeetingId;
+                    const batch = writeBatch(AppState.db);
+                    const meetingRef = doc(AppState.db, `artifacts/${__app_id}/users/${AppState.userId}/meetings`, meetingId);
+                    batch.update(meetingRef, meetingData);
+
+                    formState.localActionItems.forEach(item => {
+                        const isExisting = formState.initialActionItems.some(initial => initial.id === item.id);
+                        const { id, ...itemData } = item;
+                        if (isExisting) {
+                            batch.update(doc(AppState.db, `artifacts/${__app_id}/users/${AppState.userId}/actionItems`, id), itemData);
+                        } else {
+                            const newItemRef = doc(collection(AppState.db, `artifacts/${__app_id}/users/${AppState.userId}/actionItems`));
+                            batch.set(newItemRef, { ...itemData, meetingId, createdAt: serverTimestamp() });
+                        }
+                    });
+
+                    const deletedItemIds = formState.initialActionItems.filter(initial => !formState.localActionItems.some(local => local.id === initial.id)).map(item => item.id);
+                    deletedItemIds.forEach(id => {
+                        batch.delete(doc(AppState.db, `artifacts/${__app_id}/users/${AppState.userId}/actionItems`, id));
+                    });
+
+                    await batch.commit();
+                    navigateTo('meeting-detail', meetingId);
+                } else {
+                    const docRef = await addDoc(collection(AppState.db, `artifacts/${__app_id}/users/${AppState.userId}/meetings`), { ...meetingData, createdAt: serverTimestamp() });
+                    const newMeetingId = docRef.id;
+                    const batch = writeBatch(AppState.db);
+                    
+                    formState.localActionItems.forEach(item => {
+                        if (item.createdAt) { // It's an existing item carried over
+                            batch.update(doc(AppState.db, `artifacts/${__app_id}/users/${AppState.userId}/actionItems`, item.id), { meetingId: newMeetingId });
+                        } else { // It's a new item created in the form
+                            const newItemRef = doc(collection(AppState.db, `artifacts/${__app_id}/users/${AppState.userId}/actionItems`));
+                            const { id, ...itemDataToSave } = item;
+                            batch.set(newItemRef, { ...itemDataToSave, meetingId: newMeetingId, createdAt: serverTimestamp() });
+                        }
+                    });
+                    await batch.commit();
+                    navigateTo('meeting-detail', newMeetingId);
+                }
+            } catch (err) {
+                console.error("Error saving meeting:", err);
+                alert("Gagal menyimpan meeting.");
+            }
+        }
+
+        function handleSaveLocallyActionItem(item) {
+            const formState = window.currentMeetingFormState;
+            const existingIndex = formState.localActionItems.findIndex(i => i.id === item.id);
+            if (existingIndex > -1) {
+                formState.localActionItems[existingIndex] = item;
+            } else {
+                formState.localActionItems.push(item);
+            }
+            window.renderLocalActionItems();
+        }
+
+        async function handleDeleteMeeting(meetingId) {
+            if (!AppState.db || !AppState.userId || !meetingId) return;
+            try {
+                const batch = writeBatch(AppState.db);
+                const itemsQuery = query(collection(AppState.db, `artifacts/${__app_id}/users/${AppState.userId}/actionItems`), where("meetingId", "==", meetingId));
+                const itemsSnapshot = await getDocs(itemsQuery);
+                itemsSnapshot.forEach(doc => batch.delete(doc.ref));
+                batch.delete(doc(AppState.db, `artifacts/${__app_id}/users/${AppState.userId}/meetings`, meetingId));
+                await batch.commit();
+                navigateTo('meetings');
+            } catch (err) {
+                console.error("Error deleting meeting:", err);
+                alert("Gagal menghapus meeting.");
+            }
+        }
+
+        async function handleDeleteActionItem(itemId) {
+            if (!AppState.db || !AppState.userId || !itemId) return;
+            try {
+                await deleteDoc(doc(AppState.db, `artifacts/${__app_id}/users/${AppState.userId}/actionItems`, itemId));
+            } catch (err) {
+                console.error("Error deleting action item:", err);
+                alert("Gagal menghapus item tindakan.");
+            }
+        }
+
+        // --- MODAL FUNCTIONS ---
+
+        function showConfirmationModal(title, message, onConfirm) {
+            const modalId = `modal-${Date.now()}`;
+            const modalHTML = `
+                <div id="${modalId}" class="fixed inset-0 z-50 flex items-center justify-center bg-black bg-opacity-50">
+                    <div class="w-full max-w-sm p-6 bg-white rounded-lg shadow-lg">
+                        <h3 class="mb-4 text-xl font-semibold text-gray-900">${title}</h3>
+                        <p class="mb-6 text-gray-700">${message}</p>
+                        <div class="flex justify-end space-x-3">
+                            <button data-action="cancel" class="px-4 py-2 text-gray-700 bg-gray-200 rounded-md hover:bg-gray-300">Batal</button>
+                            <button data-action="confirm" class="px-4 py-2 text-white bg-red-600 rounded-md hover:bg-red-700">Konfirmasi</button>
+                        </div>
+                    </div>
+                </div>`;
+            modalContainer.insertAdjacentHTML('beforeend', modalHTML);
+            
+            const modalElement = document.getElementById(modalId);
+            modalElement.addEventListener('click', (e) => {
+                const action = e.target.dataset.action;
+                if (action === 'confirm') {
+                    onConfirm();
+                    modalElement.remove();
+                } else if (action === 'cancel') {
+                    modalElement.remove();
+                }
+            });
+        }
+
+        function showActionItemFormModal({ onSaveLocally, meetingId, selectedActionItem, clinicToAssignAction }) {
+            const modalId = `modal-form-${Date.now()}`;
+            const isEditMode = !!selectedActionItem;
+            
+            let itemState = {
+                id: isEditMode ? selectedActionItem.id : Date.now().toString(),
+                title: isEditMode ? selectedActionItem.title || '' : '',
+                assignedTo: isEditMode ? selectedActionItem.assignedTo || '' : clinicToAssignAction || '',
+                dueDate: isEditMode ? formatShortDisplayDate(selectedActionItem.dueDate) : '',
+                status: isEditMode ? selectedActionItem.status || 'Open' : 'Open',
+                followUps: isEditMode ? JSON.parse(JSON.stringify(selectedActionItem.followUps || [])) : [],
+            };
+            
+            const renderFollowUps = () => {
+                const container = document.getElementById(`${modalId}-followups`);
+                if (!container) return;
+                container.innerHTML = itemState.followUps.map((fu, index) => `
+                    <li class="flex items-start justify-between p-3 bg-gray-100 rounded-md">
+                        <div>
+                            <p class="text-sm font-medium text-gray-900">Tanggal: ${formatShortDisplayDate(fu.followUpDate)}</p>
+                            <p class="text-sm text-gray-700">${fu.followUpDetail}</p>
+                        </div>
+                        <button type="button" data-action="remove-followup" data-index="${index}" class="ml-4 text-red-500 hover:text-red-700" title="Hapus Follow-up">
+                             <svg xmlns="http://www.w3.org/2000/svg" class="w-5 h-5 pointer-events-none" viewBox="0 0 20 20" fill="currentColor"><path fill-rule="evenodd" d="M9 2a1 1 0 00-.894.553L7.382 4H4a1 1 0 000 2v10a2 2 0 002 2h8a2 2 0 002-2V6a1 1 0 100-2h-3.382l-.724-1.447A1 1 0 0011 2H9zM7 8a1 1 0 012 0v6a1 1 0 11-2 0V8zm5-1a1 1 0 00-1 1v6a1 1 0 102 0V8a1 1 0 00-1-1z" clip-rule="evenodd" /></svg>
+                        </button>
+                    </li>
+                `).join('');
+            };
+
+            const modalHTML = `
+                <div id="${modalId}" class="fixed inset-0 z-50 flex items-center justify-center bg-black bg-opacity-50 p-4">
+                    <div class="w-full max-w-lg p-6 bg-white rounded-lg shadow-lg flex flex-col max-h-[90vh]">
+                        <h3 class="mb-6 text-2xl font-semibold text-gray-900 flex-shrink-0">${isEditMode ? 'Edit Item Tindakan' : 'Item Tindakan Baru'}</h3>
+                        <form id="${modalId}-form" class="flex flex-col flex-grow min-h-0">
+                            <div class="flex-grow overflow-y-auto pr-4 -mr-4">
+                                <div class="mb-4">
+                                    <label class="block mb-2 text-sm font-medium text-gray-700">Judul Item Tindakan</label>
+                                    <input type="text" name="title" value="${itemState.title}" class="w-full px-4 py-2 bg-gray-50 border border-gray-300 rounded-md" required />
+                                </div>
+                                <div class="mb-4">
+                                    <label class="block mb-2 text-sm font-medium text-gray-700">Ditugaskan kepada</label>
+                                    <select name="assignedTo" class="w-full px-4 py-2 bg-gray-50 border border-gray-300 rounded-md" required>
+                                        <option value="">Pilih Klinik</option>
+                                        ${AppState.clinics.map(c => `<option value="${c}" ${itemState.assignedTo === c ? 'selected' : ''}>${c}</option>`).join('')}
+                                    </select>
+                                </div>
+                                <div class="mb-4">
+                                    <label class="block mb-2 text-sm font-medium text-gray-700">Batas Waktu</label>
+                                    <input type="date" name="dueDate" value="${itemState.dueDate}" class="w-full px-4 py-2 bg-gray-50 border border-gray-300 rounded-md" />
+                                </div>
+                                <div class="mb-6">
+                                    <label class="block mb-2 text-sm font-medium text-gray-700">Status</label>
+                                    <select name="status" class="w-full px-4 py-2 bg-gray-50 border border-gray-300 rounded-md">
+                                        ${['Open', 'In Progress', 'Done'].map(s => `<option value="${s}" ${itemState.status === s ? 'selected' : ''}>${s}</option>`).join('')}
+                                    </select>
+                                </div>
+                                <div class="pt-4 mt-4 mb-6 border-t border-gray-200">
+                                    <h4 class="mb-3 text-lg font-semibold text-gray-800">Follow-up</h4>
+                                    <ul id="${modalId}-followups" class="mb-4 space-y-2"></ul>
+                                    <div class="flex flex-col space-y-2">
+                                        <input type="date" id="${modalId}-fu-date" class="w-full px-4 py-2 bg-gray-50 border border-gray-300 rounded-md" />
+                                        <textarea id="${modalId}-fu-detail" rows="2" class="w-full px-4 py-2 bg-gray-50 border border-gray-300 rounded-md" placeholder="Catat detail follow-up..."></textarea>
+                                        <button type="button" data-action="add-followup" class="px-4 py-2 text-sm text-white bg-green-600 rounded-md hover:bg-green-700">Tambah Follow-up</button>
+                                    </div>
+                                </div>
+                            </div>
+                            <div class="flex justify-end pt-4 mt-auto space-x-3 border-t border-gray-200 flex-shrink-0">
+                                <button type="button" data-action="cancel" class="px-4 py-2 text-gray-700 bg-gray-200 rounded-md hover:bg-gray-300">Batal</button>
+                                <button type="submit" class="px-4 py-2 text-white bg-blue-600 rounded-md hover:bg-blue-700">${isEditMode ? 'Simpan Perubahan' : 'Tambah Item'}</button>
+                            </div>
+                        </form>
+                    </div>
+                </div>`;
+            modalContainer.insertAdjacentHTML('beforeend', modalHTML);
+            renderFollowUps();
+
+            const modalElement = document.getElementById(modalId);
+            const formElement = document.getElementById(`${modalId}-form`);
+            
+            modalElement.addEventListener('click', (e) => {
+                const action = e.target.dataset.action;
+                if(action === 'cancel') modalElement.remove();
+                if(action === 'add-followup') {
+                    const dateInput = document.getElementById(`${modalId}-fu-date`);
+                    const detailInput = document.getElementById(`${modalId}-fu-detail`);
+                    if(dateInput.value && detailInput.value) {
+                        itemState.followUps.push({ followUpDate: dateInput.value, followUpDetail: detailInput.value });
+                        dateInput.value = '';
+                        detailInput.value = '';
+                        renderFollowUps();
+                    }
+                }
+                if(action === 'remove-followup') {
+                    itemState.followUps.splice(e.target.dataset.index, 1);
+                    renderFollowUps();
+                }
+            });
+
+            formElement.addEventListener('submit', async (e) => {
+                e.preventDefault();
+                const formData = new FormData(formElement);
+                const finalItem = {
+                    ...itemState,
+                    title: formData.get('title'),
+                    assignedTo: formData.get('assignedTo'),
+                    dueDate: formData.get('dueDate') || null,
+                    status: formData.get('status'),
+                };
+
+                if (onSaveLocally) {
+                    onSaveLocally(finalItem);
+                } else if (meetingId) {
+                    const { id, ...itemData } = finalItem;
+                    if (isEditMode) {
+                        await updateDoc(doc(AppState.db, `artifacts/${__app_id}/users/${AppState.userId}/actionItems`, id), {...itemData, updatedAt: serverTimestamp()});
+                    } else {
+                        await addDoc(collection(AppState.db, `artifacts/${__app_id}/users/${AppState.userId}/actionItems`), {...itemData, meetingId, createdAt: serverTimestamp()});
+                    }
+                }
+                modalElement.remove();
+            });
+        }
+
+
+        // --- EXPORT TO EXCEL ---
+
+        async function exportAllDataToExcel() {
+            if (!AppState.db || !AppState.userId) { alert("Firebase belum siap."); return; }
+            if (typeof XLSX === 'undefined') { alert("Pustaka Excel belum dimuat."); return; }
+            try {
+                const meetingsSnapshot = await getDocs(collection(AppState.db, `artifacts/${__app_id}/users/${AppState.userId}/meetings`));
+                const actionItemsSnapshot = await getDocs(collection(AppState.db, `artifacts/${__app_id}/users/${AppState.userId}/actionItems`));
+                const meetingsData = meetingsSnapshot.docs.map(doc => { const m = doc.data(); return { "ID Meeting": doc.id, "Judul": m.title, "Tanggal": m.date ? formatDisplayDate(m.date, { year: 'numeric', month: 'long', day: 'numeric' }) : '', "Peserta": m.participants?.join(', '), "Pembaruan Klinik": Object.entries(m.clinicUpdates || {}).map(([c, u]) => `${c}: ${u}`).join('\n'), "Diskusi Umum": m.discussionPoints, }; });
+                const actionItemsData = actionItemsSnapshot.docs.map(doc => { const item = doc.data(); return { "ID Item": doc.id, "ID Meeting Terkait": item.meetingId, "Judul": item.title, "Ditugaskan Kepada": item.assignedTo, "Batas Waktu": item.dueDate ? formatShortDisplayDate(item.dueDate) : '', "Status": item.status, "Follow-ups": item.followUps?.map(f => `${formatShortDisplayDate(f.followUpDate)}: ${f.followUpDetail}`).join('\n') }; });
+                const meetingsSheet = XLSX.utils.json_to_sheet(meetingsData);
+                const actionItemsSheet = XLSX.utils.json_to_sheet(actionItemsData);
+                const workbook = XLSX.utils.book_new();
+                XLSX.utils.book_append_sheet(workbook, meetingsSheet, "Daftar Meeting");
+                XLSX.utils.book_append_sheet(workbook, actionItemsSheet, "Item Tindakan");
+                XLSX.writeFile(workbook, `Mediflow_Export_${new Date().toISOString().slice(0, 10)}.xlsx`);
+                alert("Data berhasil diekspor ke Excel!");
+            } catch (err) {
+                console.error("Error exporting data to Excel:", err);
+                alert("Gagal mengekspor data.");
+            }
+        }
+
+        // --- NAVIGATION & ROUTING ---
+
+        function navigateTo(page, id = null) {
+            cleanupListeners();
+            AppState.currentPage = page;
+            AppState.currentMeetingId = id;
+            renderApp();
+        }
+
+        function renderApp() {
+            if (AppState.loading) { appRoot.innerHTML = LoadingSpinner(); return; }
+            if (AppState.error) { appRoot.innerHTML = ErrorDisplay(AppState.error); return; }
+            
+            appHeader.innerHTML = Header();
+            
+            switch (AppState.currentPage) {
+                case 'dashboard': renderDashboard(); break;
+                case 'meetings': renderMeetingList(); break;
+                case 'meeting-detail': renderMeetingDetail(); break;
+                case 'new-meeting':
+                case 'edit-meeting': renderMeetingForm(); break;
+                case 'clinic-dashboard': renderClinicDashboard(); break;
+                default: renderDashboard();
+            }
+        }
+
+        // --- INITIALIZATION ---
+
+        async function initializeFirebase() {
+            try {
+                const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
+                
+                // Cek apakah variabel global __firebase_config sudah ada
+                let firebaseConfig;
+                if (typeof __firebase_config !== 'undefined' && __firebase_config) {
+                    firebaseConfig = JSON.parse(__firebase_config);
+                } else {
+                    // --- PASTE KONFIGURASI FIREBASE ANDA DI SINI ---
+                    // Ganti objek kosong ini dengan konfigurasi dari Firebase Console Anda
+                    firebaseConfig = {
+                        apiKey: "AIzaSyBNE8gS-WYTJRhdCN74dpSYsMS3ZHlJfyQ",
+                        authDomain: "mymediflow.firebaseapp.com",
+                        projectId: "mymediflow",
+                        storageBucket: "mymediflow.firebasestorage.app",
+                        messagingSenderId: "689175078659",
+                        appId: "1:689175078659:web:877bf409714d2d74216b36"
+                    };
+                    // ----------------------------------------------------
+                }
+
+                const initialAuthToken = typeof __initial_auth_token !== 'undefined' ? __initial_auth_token : null;
+
+                const app = initializeApp(firebaseConfig);
+                AppState.db = getFirestore(app);
+                AppState.auth = getAuth(app);
+
+                onAuthStateChanged(AppState.auth, async (user) => {
+                    if (user) {
+                        AppState.userId = user.uid;
+                    } else {
+                        if (initialAuthToken) {
+                            await signInWithCustomToken(AppState.auth, initialAuthToken);
+                        } else {
+                            await signInAnonymously(AppState.auth);
+                        }
+                    }
+                    AppState.loading = false;
+                    renderApp();
+                });
+            } catch (err) {
+                console.error("Error initializing Firebase:", err);
+                AppState.error = "Gagal menginisialisasi aplikasi. Periksa konfigurasi Firebase Anda.";
+                AppState.loading = false;
+                renderApp();
+            }
+        }
+
+        // Start the application
+        initializeFirebase();
+
+    </script>
+</body>
+</html>
