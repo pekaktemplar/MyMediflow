@@ -71,6 +71,18 @@
             clinics: ['Mataram', 'Maluk', 'Bali', 'Surabaya', 'Yogyakarta', 'Semarang'],
             listeners: [], 
         };
+
+        // --- AUTHORIZED USERS ---
+        // DAFTAR EMAIL YANG DIIZINKAN: Hanya alamat email di dalam array ini yang dapat mengakses aplikasi.
+        const authorizedEmails = [
+            'muhherman226@gmail.com',
+            'afm.firmansyahagung@gmail.com',
+            'ekonovidianto7@gmail.com',
+            'fati.imahss@gmail.com',
+            'kadeklestary@gmail.com',
+            'pekaktemplar@gmail.com'
+            // Tambahkan alamat email lain di sini dalam tanda kutip dan pisahkan dengan koma
+        ];
         
         // DOM elements
         const appRoot = document.getElementById('app-root');
@@ -116,11 +128,12 @@
         const ErrorDisplay = (message) => `
             <div class="flex items-center justify-center min-h-screen text-xl text-red-600"><p>${message}</p></div>`;
         
-        const LoginPage = () => `
+        const LoginPage = (errorMessage = '') => `
             <div class="flex flex-col items-center justify-center min-h-screen bg-gray-100">
-                <div class="p-8 bg-white rounded-lg shadow-xl text-center">
+                <div class="p-8 bg-white rounded-lg shadow-xl text-center w-full max-w-md">
                     <h1 class="text-5xl font-bold text-blue-600 mb-4">Mediflow</h1>
-                    <p class="text-gray-600 mb-8">Silakan login untuk melanjutkan</p>
+                    <p class="text-gray-600 mb-6">Silakan login untuk melanjutkan</p>
+                    ${errorMessage ? `<p id="auth-error" class="bg-red-100 text-red-700 p-3 rounded-md mb-6">${errorMessage}</p>` : ''}
                     <button data-action="login-google" class="w-full px-6 py-3 text-white bg-green-500 rounded-md hover:bg-green-600 flex items-center justify-center text-lg">
                         <svg class="w-6 h-6 mr-3" aria-hidden="true" focusable="false" data-prefix="fab" data-icon="google" role="img" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 488 512"><path fill="currentColor" d="M488 261.8C488 403.3 391.1 504 248 504 110.8 504 0 393.2 0 256S110.8 8 248 8c66.8 0 126 23.4 172.9 62.3l-66.5 64.6C305.5 102.2 279.5 96 248 96c-88.8 0-160.1 71.1-160.1 160s71.3 160 160.1 160c97.4 0 134-60.1 140.8-92.2H248v-70.1h239.9c2.5 12.7 3.9 26.1 3.9 40z"></path></svg>
                         Login with Google
@@ -571,7 +584,9 @@
                 await signInWithPopup(AppState.auth, provider);
             } catch (error) {
                 console.error("Error signing in with Google:", error);
-                alert("Gagal login dengan Google. Silakan coba lagi.");
+                 // Display error on the login page
+                const errorElement = document.getElementById('auth-error');
+                if(errorElement) errorElement.textContent = "Gagal login dengan Google. Silakan coba lagi.";
             }
         }
 
@@ -969,20 +984,28 @@
 
                 onAuthStateChanged(AppState.auth, (user) => {
                     if (user && !user.isAnonymous) {
-                        // User is properly logged in with Google
-                        AppState.userId = user.uid;
-                        AppState.loading = false;
-                        
-                        // Render the main application structure
-                        appRoot.innerHTML = `
-                            <header id="app-header"></header>
-                            <main id="app-main"></main>
-                        `;
-                        appRoot.querySelector('#app-header').innerHTML = Header();
-                        renderAppContent(); // Render the current page (e.g., dashboard)
+                        // User is logged in, now check if they are authorized
+                        if (authorizedEmails.includes(user.email)) {
+                            // User is authorized, show the main app
+                            AppState.userId = user.uid;
+                            AppState.loading = false;
+                            
+                            appRoot.innerHTML = `
+                                <header id="app-header"></header>
+                                <main id="app-main"></main>
+                            `;
+                            appRoot.querySelector('#app-header').innerHTML = Header();
+                            renderAppContent();
+                        } else {
+                            // User is not authorized, sign them out and show login with error
+                            const unauthorizedEmail = user.email;
+                            signOut(AppState.auth).then(() => {
+                                appRoot.innerHTML = LoginPage(`Akses ditolak. Akun ${unauthorizedEmail} tidak terdaftar.`);
+                            });
+                        }
                     } else {
-                        // User is not logged in or is anonymous, show the login page
-                        cleanupListeners(); // Clean up any data listeners
+                        // User is not logged in, show the login page
+                        cleanupListeners();
                         AppState.userId = null;
                         AppState.loading = false;
                         appRoot.innerHTML = LoginPage();
@@ -1003,3 +1026,4 @@
     </script>
 </body>
 </html>
+
