@@ -8,29 +8,30 @@
     <script src="https://cdn.tailwindcss.com"></script>
     <!-- SheetJS (xlsx) for Excel export functionality -->
     <script src="https://cdn.sheetjs.com/xlsx-0.20.2/package/dist/xlsx.full.min.js"></script>
+    <!-- Chart.js for data visualization -->
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
     <style>
-        /* Custom scrollbar for a better look in modals and textareas */
-        ::-webkit-scrollbar {
-            width: 8px;
-        }
-        ::-webkit-scrollbar-track {
-            background: #f1f1f1;
-            border-radius: 10px;
-        }
-        ::-webkit-scrollbar-thumb {
-            background: #888;
-            border-radius: 10px;
-        }
-        ::-webkit-scrollbar-thumb:hover {
-            background: #555;
-        }
+        /* Custom scrollbar for a better look */
+        ::-webkit-scrollbar { width: 8px; }
+        ::-webkit-scrollbar-track { background: #f1f1f1; border-radius: 10px; }
+        ::-webkit-scrollbar-thumb { background: #888; border-radius: 10px; }
+        ::-webkit-scrollbar-thumb:hover { background: #555; }
+        .dark ::-webkit-scrollbar-track { background: #2d3748; }
+        .dark ::-webkit-scrollbar-thumb { background: #718096; }
+        .dark ::-webkit-scrollbar-thumb:hover { background: #a0aec0; }
         /* Style to hide elements */
-        .hidden {
-            display: none;
-        }
+        .hidden { display: none; }
     </style>
+    <script>
+        // Immediately apply theme to prevent flash of unstyled content
+        if (localStorage.theme === 'dark' || (!('theme' in localStorage) && window.matchMedia('(prefers-color-scheme: dark)').matches)) {
+          document.documentElement.classList.add('dark');
+        } else {
+          document.documentElement.classList.remove('dark');
+        }
+    </script>
 </head>
-<body class="bg-gray-100 font-sans antialiased">
+<body class="bg-gray-100 dark:bg-gray-900 font-sans antialiased transition-colors duration-300">
 
     <!-- Main application container -->
     <div id="app-root">
@@ -54,7 +55,8 @@
         } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
         import { 
             getFirestore, collection, doc, addDoc, getDoc, updateDoc, 
-            deleteDoc, onSnapshot, query, where, serverTimestamp, writeBatch, getDocs
+            deleteDoc, onSnapshot, query, where, serverTimestamp, writeBatch, getDocs,
+            or, and
         } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
 
         // --- GLOBAL APP STATE AND CONFIG ---
@@ -68,12 +70,13 @@
             error: null,
             currentPage: 'dashboard',
             currentMeetingId: null,
+            currentSearchTerm: '',
             clinics: ['Mataram', 'Maluk', 'Bali', 'Surabaya', 'Yogyakarta', 'Semarang'],
             listeners: [], 
+            chartInstances: {},
         };
 
         // --- AUTHORIZED USERS ---
-        // DAFTAR EMAIL YANG DIIZINKAN: Hanya alamat email di dalam array ini yang dapat mengakses aplikasi.
         const authorizedEmails = [
             'muhherman226@gmail.com',
             'afm.firmansyahagung@gmail.com',
@@ -81,7 +84,6 @@
             'fati.imahss@gmail.com',
             'kadeklestary@gmail.com',
             'pekaktemplar@gmail.com'
-            // Tambahkan alamat email lain di sini dalam tanda kutip dan pisahkan dengan koma
         ];
         
         // DOM elements
@@ -106,33 +108,41 @@
 
         const getStatusClasses = (status) => {
             switch (status) {
-                case 'Done': return 'bg-green-100 text-green-800 border-green-300';
-                case 'In Progress': return 'bg-yellow-100 text-yellow-800 border-yellow-300';
-                default: return 'bg-gray-100 text-gray-800 border-gray-300';
+                case 'Done': return 'bg-green-100 text-green-800 border-green-300 dark:bg-green-900 dark:text-green-200 dark:border-green-700';
+                case 'In Progress': return 'bg-yellow-100 text-yellow-800 border-yellow-300 dark:bg-yellow-900 dark:text-yellow-200 dark:border-yellow-700';
+                default: return 'bg-gray-100 text-gray-800 border-gray-300 dark:bg-gray-700 dark:text-gray-200 dark:border-gray-600';
             }
         };
         
         function cleanupListeners() {
             AppState.listeners.forEach(unsubscribe => unsubscribe());
             AppState.listeners = [];
+            Object.values(AppState.chartInstances).forEach(chart => chart.destroy());
+            AppState.chartInstances = {};
+        }
+        
+        function toggleTheme() {
+            const html = document.documentElement;
+            html.classList.toggle('dark');
+            localStorage.theme = html.classList.contains('dark') ? 'dark' : 'light';
         }
 
         // --- UI COMPONENT FUNCTIONS (TEMPLATE GENERATORS) ---
         
         const LoadingSpinner = () => `
-            <div class="flex items-center justify-center min-h-screen bg-gray-100">
+            <div class="flex items-center justify-center min-h-screen bg-gray-100 dark:bg-gray-900">
                 <div class="w-16 h-16 border-4 border-t-4 border-blue-500 border-solid rounded-full animate-spin"></div>
-                <p class="ml-4 text-gray-700">Memuat aplikasi...</p>
+                <p class="ml-4 text-gray-700 dark:text-gray-300">Memuat aplikasi...</p>
             </div>`;
 
         const ErrorDisplay = (message) => `
             <div class="flex items-center justify-center min-h-screen text-xl text-red-600"><p>${message}</p></div>`;
         
         const LoginPage = (errorMessage = '') => `
-            <div class="flex flex-col items-center justify-center min-h-screen bg-gray-100">
-                <div class="p-8 bg-white rounded-lg shadow-xl text-center w-full max-w-md">
-                    <h1 class="text-5xl font-bold text-blue-600 mb-4">Mediflow</h1>
-                    <p class="text-gray-600 mb-6">Silakan login untuk melanjutkan</p>
+            <div class="flex flex-col items-center justify-center min-h-screen bg-gray-100 dark:bg-gray-900">
+                <div class="p-8 bg-white dark:bg-gray-800 rounded-lg shadow-xl text-center w-full max-w-md">
+                    <h1 class="text-5xl font-bold text-blue-600 dark:text-blue-400 mb-4">Mediflow</h1>
+                    <p class="text-gray-600 dark:text-gray-300 mb-6">Silakan login untuk melanjutkan</p>
                     ${errorMessage ? `<p id="auth-error" class="bg-red-100 text-red-700 p-3 rounded-md mb-6">${errorMessage}</p>` : ''}
                     <button data-action="login-google" class="w-full px-6 py-3 text-white bg-green-500 rounded-md hover:bg-green-600 flex items-center justify-center text-lg">
                         <svg class="w-6 h-6 mr-3" aria-hidden="true" focusable="false" data-prefix="fab" data-icon="google" role="img" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 488 512"><path fill="currentColor" d="M488 261.8C488 403.3 391.1 504 248 504 110.8 504 0 393.2 0 256S110.8 8 248 8c66.8 0 126 23.4 172.9 62.3l-66.5 64.6C305.5 102.2 279.5 96 248 96c-88.8 0-160.1 71.1-160.1 160s71.3 160 160.1 160c97.4 0 134-60.1 140.8-92.2H248v-70.1h239.9c2.5 12.7 3.9 26.1 3.9 40z"></path></svg>
@@ -153,47 +163,58 @@
             }
 
             return `
-            <header class="flex items-center justify-between p-4 bg-blue-600 shadow-md">
+            <header class="flex items-center justify-between p-4 bg-blue-600 shadow-md dark:bg-gray-800">
                 <h1 class="text-3xl font-bold text-white cursor-pointer" data-action="navigate" data-page="dashboard">Mediflow</h1>
-                <nav class="hidden md:flex items-center space-x-2">
-                    <button data-action="navigate" data-page="dashboard" class="px-4 py-2 text-white transition-colors duration-200 rounded-md hover:bg-blue-700">Dashboard</button>
-                    <button data-action="navigate" data-page="meetings" class="px-4 py-2 text-white transition-colors duration-200 rounded-md hover:bg-blue-700">Daftar Meeting</button>
-                    <button data-action="navigate" data-page="clinic-dashboard" class="px-4 py-2 text-white transition-colors duration-200 rounded-md hover:bg-blue-700">Dashboard Klinik</button>
-                    <button data-action="navigate" data-page="new-meeting" class="px-4 py-2 text-white transition-colors duration-200 bg-blue-500 rounded-md hover:bg-blue-700">+ Meeting Baru</button>
-                    <button data-action="export-excel" class="px-4 py-2 text-white transition-colors duration-200 bg-green-500 rounded-md hover:bg-green-600">Export Excel</button>
+                
+                <div class="flex-1 max-w-xl mx-4">
+                     <form id="global-search-form">
+                        <input type="search" id="global-search-input" class="w-full px-4 py-2 text-gray-800 bg-white border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-2 focus:ring-blue-400" placeholder="Cari di semua meeting & item tindakan...">
+                     </form>
+                </div>
+
+                <nav class="hidden lg:flex items-center space-x-2">
+                    <button data-action="navigate" data-page="dashboard" class="px-4 py-2 text-white transition-colors duration-200 rounded-md hover:bg-blue-700 dark:hover:bg-gray-700">Dashboard</button>
+                    <button data-action="navigate" data-page="meetings" class="px-4 py-2 text-white transition-colors duration-200 rounded-md hover:bg-blue-700 dark:hover:bg-gray-700">Daftar Meeting</button>
+                    <button data-action="navigate" data-page="clinic-dashboard" class="px-4 py-2 text-white transition-colors duration-200 rounded-md hover:bg-blue-700 dark:hover:bg-gray-700">Dashboard Klinik</button>
+                    <button data-action="navigate" data-page="new-meeting" class="px-4 py-2 text-white transition-colors duration-200 bg-blue-500 rounded-md hover:bg-blue-700 dark:bg-blue-700 dark:hover:bg-blue-600">+ Meeting Baru</button>
+                    <button data-action="export-excel" class="px-4 py-2 text-white transition-colors duration-200 bg-green-500 rounded-md hover:bg-green-600 dark:bg-green-600 dark:hover:bg-green-500">Export Excel</button>
                 </nav>
-                <div class="flex items-center space-x-2 text-sm text-white">
+
+                <div class="flex items-center space-x-3 text-sm text-white">
+                    <button data-action="toggle-theme" class="p-2 rounded-full hover:bg-blue-700 dark:hover:bg-gray-700">
+                        <svg id="theme-icon-light" class="w-5 h-5 ${localStorage.theme === 'dark' ? 'hidden' : ''}" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 3v1m0 16v1m9-9h-1M4 12H3m15.364 6.364l-.707-.707M6.343 6.343l-.707-.707m12.728 0l-.707.707M6.343 17.657l-.707.707M16 12a4 4 0 11-8 0 4 4 0 018 0z"></path></svg>
+                        <svg id="theme-icon-dark" class="w-5 h-5 ${localStorage.theme === 'dark' ? '' : 'hidden'}" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M20.354 15.354A9 9 0 018.646 3.646 9.003 9.003 0 0012 21a9.003 9.003 0 008.354-5.646z"></path></svg>
+                    </button>
                     ${authDisplay}
                 </div>
             </header>`;
         }
 
-
         const MeetingCard = (meeting) => `
-            <div class="p-4 bg-white rounded-lg shadow-md">
-                <h5 class="mb-2 text-xl font-semibold text-gray-900">${meeting.title}</h5>
-                <p class="text-sm text-gray-600">
+            <div class="p-4 bg-white dark:bg-gray-800 rounded-lg shadow-md">
+                <h5 class="mb-2 text-xl font-semibold text-gray-900 dark:text-white">${meeting.title}</h5>
+                <p class="text-sm text-gray-600 dark:text-gray-400">
                     <span class="font-medium">Tanggal:</span> 
                     ${formatDisplayDate(meeting.date, { year: 'numeric', month: 'long', day: 'numeric' })}
                 </p>
-                <button data-action="navigate" data-page="meeting-detail" data-id="${meeting.id}" class="px-4 py-2 mt-4 text-sm text-white bg-blue-600 rounded-md hover:bg-blue-700">
+                <button data-action="navigate" data-page="meeting-detail" data-id="${meeting.id}" class="px-4 py-2 mt-4 text-sm text-white bg-blue-600 rounded-md hover:bg-blue-700 dark:bg-blue-700 dark:hover:bg-blue-600">
                     Lihat Detail Meeting
                 </button>
             </div>`;
 
         const ActionItemListItem = (item, showControls = false, isLocal = false) => `
-            <li class="p-3 bg-white rounded-md shadow-sm">
-                <p class="font-medium text-gray-900">${item.title}</p>
-                <p class="text-xs text-gray-600">Ditugaskan ke: ${item.assignedTo}</p>
-                <p class="text-xs text-gray-600">Batas Waktu: ${formatShortDisplayDate(item.dueDate) || 'Tidak ada'}</p>
+            <li class="p-3 bg-white dark:bg-gray-800 rounded-md shadow-sm">
+                <p class="font-medium text-gray-900 dark:text-white">${item.title}</p>
+                <p class="text-xs text-gray-600 dark:text-gray-400">Ditugaskan ke: ${item.assignedTo}</p>
+                <p class="text-xs text-gray-600 dark:text-gray-400">Batas Waktu: ${formatShortDisplayDate(item.dueDate) || 'Tidak ada'}</p>
                 ${item.followUps && item.followUps.length > 0 ? `
-                    <div class="mt-2 text-xs text-gray-500">
+                    <div class="mt-2 text-xs text-gray-500 dark:text-gray-400">
                         <span class="font-semibold">Follow-up:</span>
                         <ul class="ml-4 list-disc list-inside">
                             ${item.followUps.map(fu => `
                                 <li>
                                     ${formatShortDisplayDate(fu.followUpDate)}:
-                                    ${fu.followUpDetail.split('\n').map(line => line.trim() ? `<p class="pl-4 text-sm text-gray-700">${line.trim().replace(/^- /, '')}</p>` : '').join('')}
+                                    ${fu.followUpDetail.split('\n').map(line => line.trim() ? `<p class="pl-4 text-sm text-gray-700 dark:text-gray-300">${line.trim().replace(/^- /, '')}</p>` : '').join('')}
                                 </li>
                             `).join('')}
                         </ul>
@@ -203,10 +224,10 @@
                     <div class="px-3 py-1 text-sm font-medium rounded-full ${getStatusClasses(item.status)}">${item.status}</div>
                     ${showControls ? `
                         <div class="space-x-2">
-                            <button data-action="${isLocal ? 'edit-local-action-item' : 'edit-action-item'}" data-id="${item.id}" class="text-blue-600 hover:text-blue-800" title="Edit Item Tindakan">
+                            <button data-action="${isLocal ? 'edit-local-action-item' : 'edit-action-item'}" data-id="${item.id}" class="text-blue-600 hover:text-blue-800 dark:text-blue-400 dark:hover:text-blue-300" title="Edit Item Tindakan">
                                 <svg xmlns="http://www.w3.org/2000/svg" class="w-5 h-5 pointer-events-none" viewBox="0 0 20 20" fill="currentColor"><path d="M13.586 3.586a2 2 0 112.828 2.828l-.793.793-2.828-2.828.793-.793zM11.379 5.793L3 14.172V17h2.828l8.38-8.38-2.827-2.828z" /></svg>
                             </button>
-                            <button data-action="${isLocal ? 'delete-local-action-item' : 'delete-action-item'}" data-id="${item.id}" class="text-red-600 hover:text-red-800" title="Hapus Item Tindakan">
+                            <button data-action="${isLocal ? 'delete-local-action-item' : 'delete-action-item'}" data-id="${item.id}" class="text-red-600 hover:text-red-800 dark:text-red-400 dark:hover:text-red-300" title="Hapus Item Tindakan">
                                 <svg xmlns="http://www.w3.org/2000/svg" class="w-5 h-5 pointer-events-none" viewBox="0 0 20 20" fill="currentColor"><path fill-rule="evenodd" d="M9 2a1 1 0 00-.894.553L7.382 4H4a1 1 0 000 2v10a2 2 0 002 2h8a2 2 0 002-2V6a1 1 0 100-2h-3.382l-.724-1.447A1 1 0 0011 2H9zM7 8a1 1 0 012 0v6a1 1 0 11-2 0V8zm5-1a1 1 0 00-1 1v6a1 1 0 102 0V8a1 1 0 00-1-1z" clip-rule="evenodd" /></svg>
                             </button>
                         </div>
@@ -217,7 +238,7 @@
         // --- PAGE RENDERING FUNCTIONS ---
         
         async function renderDashboard() {
-            appRoot.querySelector('main').innerHTML = `<div class="p-6"><h2 class="mb-6 text-4xl font-extrabold text-gray-900">Dashboard</h2><div id="dashboard-content"></div></div>`;
+            appRoot.querySelector('main').innerHTML = `<div class="p-6"><h2 class="mb-6 text-4xl font-extrabold text-gray-900 dark:text-white">Dashboard</h2><div id="dashboard-content">${LoadingSpinner()}</div></div>`;
             const content = document.getElementById('dashboard-content');
             
             if (!AppState.db || !AppState.userId) return;
@@ -228,43 +249,97 @@
             const meetings = meetingsSnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
             const actionItems = actionItemsSnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
 
-            const upcomingMeetings = meetings.filter(m => new Date(m.date) > new Date()).sort((a, b) => new Date(a.date) - new Date(b.date)).slice(0, 3);
             const overdueActionItems = actionItems.filter(item => item.status !== 'Done' && item.dueDate && new Date(item.dueDate) < new Date());
             const pendingActionItems = actionItems.filter(item => item.status === 'Open' || item.status === 'In Progress');
+            
+            // Data for charts
+            const statusCounts = actionItems.reduce((acc, item) => {
+                acc[item.status] = (acc[item.status] || 0) + 1;
+                return acc;
+            }, {});
+            const itemsPerClinic = actionItems.reduce((acc, item) => {
+                const clinic = item.assignedTo || 'Unassigned';
+                acc[clinic] = (acc[clinic] || 0) + 1;
+                return acc;
+            }, {});
 
             content.innerHTML = `
                 <div class="grid grid-cols-1 gap-6 mb-8 md:grid-cols-3">
-                    <div class="p-6 bg-white rounded-lg shadow-lg"><h3 class="mb-2 text-lg font-semibold text-gray-700">Total Meeting</h3><p class="text-5xl font-bold text-blue-600">${meetings.length}</p></div>
-                    <div class="p-6 bg-white rounded-lg shadow-lg"><h3 class="mb-2 text-lg font-semibold text-gray-700">Item Tindakan Terbuka</h3><p class="text-5xl font-bold text-yellow-600">${pendingActionItems.length}</p></div>
-                    <div class="p-6 bg-white rounded-lg shadow-lg"><h3 class="mb-2 text-lg font-semibold text-gray-700">Item Tindakan Lewat Batas</h3><p class="text-5xl font-bold text-red-600">${overdueActionItems.length}</p></div>
+                    <div class="p-6 bg-white dark:bg-gray-800 rounded-lg shadow-lg"><h3 class="mb-2 text-lg font-semibold text-gray-700 dark:text-gray-300">Total Meeting</h3><p class="text-5xl font-bold text-blue-600 dark:text-blue-400">${meetings.length}</p></div>
+                    <div class="p-6 bg-white dark:bg-gray-800 rounded-lg shadow-lg"><h3 class="mb-2 text-lg font-semibold text-gray-700 dark:text-gray-300">Item Tindakan Terbuka</h3><p class="text-5xl font-bold text-yellow-600 dark:text-yellow-400">${pendingActionItems.length}</p></div>
+                    <div class="p-6 bg-white dark:bg-gray-800 rounded-lg shadow-lg"><h3 class="mb-2 text-lg font-semibold text-gray-700 dark:text-gray-300">Item Tindakan Lewat Batas</h3><p class="text-5xl font-bold text-red-600 dark:text-red-400">${overdueActionItems.length}</p></div>
                 </div>
-                <section class="mb-8">
-                    <h3 class="mb-4 text-2xl font-bold text-gray-800">Meeting Mendatang</h3>
-                    ${upcomingMeetings.length > 0 ? `<div class="grid grid-cols-1 gap-4 md:grid-cols-2 lg:grid-cols-3">${upcomingMeetings.map(MeetingCard).join('')}</div>` : `<p class="text-gray-600">Tidak ada meeting yang akan datang.</p>`}
-                </section>
+                <div class="grid grid-cols-1 lg:grid-cols-3 gap-6 mb-8">
+                    <div class="lg:col-span-1 p-6 bg-white dark:bg-gray-800 rounded-lg shadow-lg">
+                        <h3 class="mb-4 text-xl font-bold text-gray-800 dark:text-white">Status Item Tindakan</h3>
+                        <canvas id="statusPieChart"></canvas>
+                    </div>
+                    <div class="lg:col-span-2 p-6 bg-white dark:bg-gray-800 rounded-lg shadow-lg">
+                        <h3 class="mb-4 text-xl font-bold text-gray-800 dark:text-white">Item Tindakan per Klinik</h3>
+                        <canvas id="itemsPerClinicChart"></canvas>
+                    </div>
+                </div>
                 <section>
-                    <h3 class="mb-4 text-2xl font-bold text-gray-800">Item Tindakan Lewat Batas Waktu</h3>
+                    <h3 class="mb-4 text-2xl font-bold text-gray-800 dark:text-white">Item Tindakan Lewat Batas Waktu</h3>
                     ${overdueActionItems.length > 0 ? `<div class="grid grid-cols-1 gap-4 md:grid-cols-2 lg:grid-cols-3">${overdueActionItems.map(item => `
-                                <div class="p-4 bg-red-100 rounded-lg shadow-md">
-                                    <h4 class="mb-1 text-xl font-semibold text-red-800">${item.title}</h4>
-                                    <p class="text-sm text-red-700">Ditugaskan ke: <span class="font-medium">${item.assignedTo}</span></p>
-                                    <p class="text-sm text-red-700">Batas Waktu: <span class="font-medium">${formatShortDisplayDate(item.dueDate)}</span></p>
+                                <div class="p-4 bg-red-100 dark:bg-red-900/50 rounded-lg shadow-md">
+                                    <h4 class="mb-1 text-xl font-semibold text-red-800 dark:text-red-200">${item.title}</h4>
+                                    <p class="text-sm text-red-700 dark:text-red-300">Ditugaskan ke: <span class="font-medium">${item.assignedTo}</span></p>
+                                    <p class="text-sm text-red-700 dark:text-red-300">Batas Waktu: <span class="font-medium">${formatShortDisplayDate(item.dueDate)}</span></p>
                                     <button data-action="navigate" data-page="meeting-detail" data-id="${item.meetingId}" class="px-4 py-2 mt-4 text-sm text-white bg-red-600 rounded-md hover:bg-red-700">Lihat Meeting</button>
-                                </div>`).join('')}</div>` : `<p class="text-gray-600">Tidak ada item tindakan yang melewati batas waktu.</p>`}
+                                </div>`).join('')}</div>` : `<p class="text-gray-600 dark:text-gray-400">Tidak ada item tindakan yang melewati batas waktu.</p>`}
                 </section>`;
+
+            // Render Charts
+            const pieCtx = document.getElementById('statusPieChart').getContext('2d');
+            AppState.chartInstances.pieChart = new Chart(pieCtx, {
+                type: 'doughnut',
+                data: {
+                    labels: Object.keys(statusCounts),
+                    datasets: [{
+                        data: Object.values(statusCounts),
+                        backgroundColor: ['#FBBF24', '#3B82F6', '#10B981'],
+                    }]
+                },
+                options: { responsive: true, maintainAspectRatio: false, plugins: { legend: { position: 'top' } } }
+            });
+
+            const barCtx = document.getElementById('itemsPerClinicChart').getContext('2d');
+            AppState.chartInstances.barChart = new Chart(barCtx, {
+                type: 'bar',
+                data: {
+                    labels: Object.keys(itemsPerClinic),
+                    datasets: [{
+                        label: 'Jumlah Item',
+                        data: Object.values(itemsPerClinic),
+                        backgroundColor: '#3B82F6',
+                    }]
+                },
+                options: { responsive: true, maintainAspectRatio: false, plugins: { legend: { display: false } }, scales: { y: { beginAtZero: true } } }
+            });
         }
         
         function renderMeetingList() {
             appRoot.querySelector('main').innerHTML = `
                 <div class="p-6">
-                    <h2 class="mb-6 text-4xl font-extrabold text-gray-900">Daftar Meeting</h2>
-                    <div class="flex flex-col gap-4 mb-6 md:flex-row">
-                        <input type="text" id="search-term" placeholder="Cari berdasarkan judul..." class="flex-grow px-4 py-2 bg-white border border-gray-300 rounded-md shadow-sm" />
-                        <select id="filter-clinic" class="w-full px-4 py-2 bg-white border border-gray-300 rounded-md shadow-sm md:w-auto">
-                            <option value="Semua">Semua Klinik</option>
-                            ${AppState.clinics.map(c => `<option value="${c}">${c}</option>`).join('')}
-                        </select>
-                        <button data-action="navigate" data-page="new-meeting" class="px-6 py-2 text-white bg-blue-600 rounded-md shadow-md md:ml-auto hover:bg-blue-700">+ Meeting Baru</button>
+                    <h2 class="mb-6 text-4xl font-extrabold text-gray-900 dark:text-white">Daftar Meeting</h2>
+                    <div class="p-4 mb-6 bg-white dark:bg-gray-800 rounded-lg shadow-md">
+                        <div class="grid grid-cols-1 md:grid-cols-4 gap-4">
+                            <input type="text" id="search-term" placeholder="Cari berdasarkan judul..." class="md:col-span-2 px-4 py-2 bg-gray-50 dark:bg-gray-700 border border-gray-300 dark:border-gray-600 rounded-md" />
+                            <select id="filter-clinic" class="px-4 py-2 bg-gray-50 dark:bg-gray-700 border border-gray-300 dark:border-gray-600 rounded-md">
+                                <option value="Semua">Semua Klinik</option>
+                                ${AppState.clinics.map(c => `<option value="${c}">${c}</option>`).join('')}
+                            </select>
+                            <button data-action="navigate" data-page="new-meeting" class="w-full px-6 py-2 text-white bg-blue-600 rounded-md shadow-md hover:bg-blue-700">+ Meeting Baru</button>
+                            <div class="md:col-span-2">
+                                <label class="text-sm text-gray-600 dark:text-gray-400">Filter Tanggal:</label>
+                                <div class="flex items-center space-x-2">
+                                    <input type="date" id="start-date" class="w-full px-4 py-2 bg-gray-50 dark:bg-gray-700 border border-gray-300 dark:border-gray-600 rounded-md" />
+                                    <span>-</span>
+                                    <input type="date" id="end-date" class="w-full px-4 py-2 bg-gray-50 dark:bg-gray-700 border border-gray-300 dark:border-gray-600 rounded-md" />
+                                </div>
+                            </div>
+                        </div>
                     </div>
                     <div id="meeting-list-container" class="grid grid-cols-1 gap-4 md:grid-cols-2 lg:grid-cols-3"></div>
                 </div>`;
@@ -272,20 +347,30 @@
             const container = document.getElementById('meeting-list-container');
             const searchInput = document.getElementById('search-term');
             const filterSelect = document.getElementById('filter-clinic');
+            const startDateInput = document.getElementById('start-date');
+            const endDateInput = document.getElementById('end-date');
             let allMeetings = [];
 
             const applyFilters = () => {
                 const searchTerm = searchInput.value.toLowerCase();
                 const filterClinic = filterSelect.value;
-                const filtered = allMeetings.filter(meeting => 
-                    (filterClinic === 'Semua' || (meeting.participants && meeting.participants.includes(filterClinic))) &&
-                    (searchTerm === '' || meeting.title.toLowerCase().includes(searchTerm))
-                );
-                container.innerHTML = filtered.length > 0 ? filtered.map(MeetingCard).join('') : `<p class="col-span-full p-4 text-center text-gray-600">Tidak ada meeting yang ditemukan.</p>`;
+                const startDate = startDateInput.value ? new Date(startDateInput.value) : null;
+                const endDate = endDateInput.value ? new Date(endDateInput.value) : null;
+
+                if(startDate) startDate.setHours(0,0,0,0);
+                if(endDate) endDate.setHours(23,59,59,999);
+
+                const filtered = allMeetings.filter(meeting => {
+                    const meetingDate = new Date(meeting.date);
+                    const matchesDate = (!startDate || meetingDate >= startDate) && (!endDate || meetingDate <= endDate);
+                    const matchesClinic = filterClinic === 'Semua' || (meeting.participants && meeting.participants.includes(filterClinic));
+                    const matchesSearch = searchTerm === '' || meeting.title.toLowerCase().includes(searchTerm);
+                    return matchesDate && matchesClinic && matchesSearch;
+                });
+                container.innerHTML = filtered.length > 0 ? filtered.map(MeetingCard).join('') : `<p class="col-span-full p-4 text-center text-gray-600 dark:text-gray-400">Tidak ada meeting yang ditemukan.</p>`;
             };
 
-            searchInput.addEventListener('input', applyFilters);
-            filterSelect.addEventListener('change', applyFilters);
+            [searchInput, filterSelect, startDateInput, endDateInput].forEach(el => el.addEventListener('input', applyFilters));
             
             const q = query(collection(AppState.db, `artifacts/${AppState.appId}/users/${AppState.userId}/meetings`));
             const unsubscribe = onSnapshot(q, (snapshot) => {
@@ -295,6 +380,59 @@
                 applyFilters();
             });
             AppState.listeners.push(unsubscribe);
+        }
+
+        async function renderSearchResults() {
+             const searchTerm = AppState.currentSearchTerm;
+             appRoot.querySelector('main').innerHTML = `<div class="p-6">
+                <h2 class="mb-6 text-3xl font-extrabold text-gray-900 dark:text-white">Hasil Pencarian untuk: "<span class="text-blue-600">${searchTerm}</span>"</h2>
+                <div id="search-results-content">${LoadingSpinner()}</div>
+             </div>`;
+             const content = document.getElementById('search-results-content');
+             if (!searchTerm) {
+                 content.innerHTML = `<p class="text-gray-600 dark:text-gray-400">Silakan masukkan kata kunci untuk memulai pencarian.</p>`;
+                 return;
+             }
+
+             // Firestore doesn't support case-insensitive search natively, so this is a basic substring match.
+             // For a real app, a third-party search service like Algolia is recommended.
+             const meetingsQuery = getDocs(query(collection(AppState.db, `artifacts/${AppState.appId}/users/${AppState.userId}/meetings`)));
+             const itemsQuery = getDocs(query(collection(AppState.db, `artifacts/${AppState.appId}/users/${AppState.userId}/actionItems`)));
+
+             const [meetingsSnapshot, itemsSnapshot] = await Promise.all([meetingsQuery, itemsQuery]);
+             
+             const lowerCaseSearchTerm = searchTerm.toLowerCase();
+             const foundMeetings = meetingsSnapshot.docs
+                .map(doc => ({ id: doc.id, ...doc.data() }))
+                .filter(m => m.title && m.title.toLowerCase().includes(lowerCaseSearchTerm));
+                
+             const foundItems = itemsSnapshot.docs
+                .map(doc => ({ id: doc.id, ...doc.data() }))
+                .filter(i => i.title && i.title.toLowerCase().includes(lowerCaseSearchTerm));
+
+             if (foundMeetings.length === 0 && foundItems.length === 0) {
+                 content.innerHTML = `<p class="text-gray-600 dark:text-gray-400">Tidak ada hasil yang ditemukan.</p>`;
+                 return;
+             }
+
+             content.innerHTML = `
+                ${foundMeetings.length > 0 ? `
+                    <section class="mb-8">
+                        <h3 class="mb-4 text-2xl font-bold text-gray-800 dark:text-white">Meeting Ditemukan (${foundMeetings.length})</h3>
+                        <div class="grid grid-cols-1 gap-4 md:grid-cols-2 lg:grid-cols-3">
+                            ${foundMeetings.map(MeetingCard).join('')}
+                        </div>
+                    </section>
+                ` : ''}
+                ${foundItems.length > 0 ? `
+                    <section>
+                        <h3 class="mb-4 text-2xl font-bold text-gray-800 dark:text-white">Item Tindakan Ditemukan (${foundItems.length})</h3>
+                        <ul class="grid grid-cols-1 gap-4 md:grid-cols-2 lg:grid-cols-3">
+                            ${foundItems.map(item => ActionItemListItem(item, false)).join('')}
+                        </ul>
+                    </section>
+                ` : ''}
+             `;
         }
 
         function renderMeetingDetail() {
@@ -324,28 +462,28 @@
                     appRoot.querySelector('main').innerHTML = `
                         <div class="p-6">
                             <div class="flex items-center justify-between mb-6">
-                                <h2 class="text-4xl font-extrabold text-gray-900">${meeting.title}</h2>
+                                <h2 class="text-4xl font-extrabold text-gray-900 dark:text-white">${meeting.title}</h2>
                                 <div class="space-x-3">
                                     <button data-action="navigate" data-page="edit-meeting" data-id="${meeting.id}" class="px-5 py-2 text-white bg-green-600 rounded-md hover:bg-green-700">Edit Meeting</button>
                                     <button data-action="delete-meeting" data-id="${meeting.id}" class="px-5 py-2 text-white bg-red-600 rounded-md hover:bg-red-700">Hapus Meeting</button>
                                 </div>
                             </div>
-                            <p class="mb-4 text-gray-700"><span class="font-semibold">Tanggal:</span> ${formatDisplayDate(meeting.date, { year: 'numeric', month: 'long', day: 'numeric' })}</p>
-                            <p class="mb-6 text-gray-700"><span class="font-semibold">Peserta:</span> ${meeting.participants?.join(', ')}</p>
+                            <p class="mb-4 text-gray-700 dark:text-gray-300"><span class="font-semibold">Tanggal:</span> ${formatDisplayDate(meeting.date, { year: 'numeric', month: 'long', day: 'numeric' })}</p>
+                            <p class="mb-6 text-gray-700 dark:text-gray-300"><span class="font-semibold">Peserta:</span> ${meeting.participants?.join(', ')}</p>
                             <div class="mb-8">
-                                <h3 class="mb-3 text-2xl font-bold text-gray-800">Pembaruan dari Klinik</h3>
-                                ${meeting.clinicUpdates && Object.keys(meeting.clinicUpdates).length > 0 ? `<ul class="grid grid-cols-1 gap-4 md:grid-cols-2 lg:grid-cols-3">${Object.entries(meeting.clinicUpdates).map(([clinic, update]) => `<li class="p-4 bg-gray-100 rounded-md"><span class="font-semibold">${clinic}:</span><ul class="ml-4 list-disc list-inside">${update.split('\n').map(line => line.trim() ? `<li>${line.trim().replace(/^- /, '')}</li>` : '').join('')}</ul></li>`).join('')}</ul>` : `<p class="text-gray-600">Tidak ada pembaruan klinik.</p>`}
+                                <h3 class="mb-3 text-2xl font-bold text-gray-800 dark:text-white">Pembaruan dari Klinik</h3>
+                                ${meeting.clinicUpdates && Object.keys(meeting.clinicUpdates).length > 0 ? `<ul class="grid grid-cols-1 gap-4 md:grid-cols-2 lg:grid-cols-3">${Object.entries(meeting.clinicUpdates).map(([clinic, update]) => `<li class="p-4 bg-gray-100 dark:bg-gray-700 rounded-md"><span class="font-semibold">${clinic}:</span><ul class="ml-4 list-disc list-inside">${update.split('\n').map(line => line.trim() ? `<li>${line.trim().replace(/^- /, '')}</li>` : '').join('')}</ul></li>`).join('')}</ul>` : `<p class="text-gray-600 dark:text-gray-400">Tidak ada pembaruan klinik.</p>`}
                             </div>
                             <div class="mb-8">
-                                <h3 class="mb-3 text-2xl font-bold text-gray-800">Diskusi Umum</h3>
-                                <div class="p-4 bg-gray-100 rounded-md whitespace-pre-wrap">${meeting.discussionPoints.split('\n').map(line => line.trim() ? `<p>${line}</p>` : '').join('')}</div>
+                                <h3 class="mb-3 text-2xl font-bold text-gray-800 dark:text-white">Diskusi Umum</h3>
+                                <div class="p-4 bg-gray-100 dark:bg-gray-700 rounded-md whitespace-pre-wrap">${meeting.discussionPoints.split('\n').map(line => line.trim() ? `<p>${line}</p>` : '').join('')}</div>
                             </div>
                             <div class="mb-8">
                                 <div class="flex items-center justify-between mb-4">
-                                    <h3 class="text-2xl font-bold text-gray-800">Item Tindakan</h3>
+                                    <h3 class="text-2xl font-bold text-gray-800 dark:text-white">Item Tindakan</h3>
                                     <button data-action="add-action-item" class="px-5 py-2 text-white bg-blue-600 rounded-md hover:bg-blue-700">+ Item Tindakan Baru</button>
                                 </div>
-                                ${actionItems.length === 0 ? `<p class="text-gray-600">Tidak ada item tindakan.</p>` : `<div class="space-y-6">${Object.entries(groupedActionItems).map(([clinicName, items]) => `<div class="p-4 border rounded-lg"><h4 class="mb-3 text-xl font-semibold text-gray-900">Klinik: ${clinicName}</h4><ul class="grid grid-cols-1 gap-4 md:grid-cols-2 lg:grid-cols-3">${items.map(item => ActionItemListItem(item, true)).join('')}</ul></div>`).join('')}</div>`}
+                                ${actionItems.length === 0 ? `<p class="text-gray-600 dark:text-gray-400">Tidak ada item tindakan.</p>` : `<div class="space-y-6">${Object.entries(groupedActionItems).map(([clinicName, items]) => `<div class="p-4 border dark:border-gray-700 rounded-lg"><h4 class="mb-3 text-xl font-semibold text-gray-900 dark:text-white">Klinik: ${clinicName}</h4><ul class="grid grid-cols-1 gap-4 md:grid-cols-2 lg:grid-cols-3">${items.map(item => ActionItemListItem(item, true)).join('')}</ul></div>`).join('')}</div>`}
                             </div>
                         </div>`;
                 });
@@ -357,10 +495,10 @@
         function renderClinicDashboard() {
             appRoot.querySelector('main').innerHTML = `
                 <div class="p-6">
-                    <h2 class="mb-6 text-4xl font-extrabold text-gray-900">Dashboard Klinik</h2>
+                    <h2 class="mb-6 text-4xl font-extrabold text-gray-900 dark:text-white">Dashboard Klinik</h2>
                     <div class="mb-8">
                         <label for="clinic-select" class="block mb-2 text-lg font-medium">Pilih Klinik:</label>
-                        <select id="clinic-select" class="w-full max-w-sm px-4 py-2 bg-white border rounded-md shadow-sm">
+                        <select id="clinic-select" class="w-full max-w-sm px-4 py-2 bg-white dark:bg-gray-700 border dark:border-gray-600 rounded-md shadow-sm">
                             ${AppState.clinics.map(c => `<option value="${c}">${c}</option>`).join('')}
                         </select>
                     </div>
@@ -375,6 +513,7 @@
             const updateDashboard = (selectedClinic) => {
                 if (unsubMeetings) unsubMeetings();
                 if (unsubItems) unsubItems();
+                if(AppState.chartInstances.clinicPieChart) AppState.chartInstances.clinicPieChart.destroy();
                 
                 content.innerHTML = LoadingSpinner();
 
@@ -385,33 +524,45 @@
                     const itemsQuery = query(collection(AppState.db, `artifacts/${AppState.appId}/users/${AppState.userId}/actionItems`), where('assignedTo', '==', selectedClinic));
                     unsubItems = onSnapshot(itemsQuery, itemsSnapshot => {
                         const actionItems = itemsSnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
-                        
-                        const openItems = actionItems.filter(item => item.status === 'Open');
-                        const inProgressItems = actionItems.filter(item => item.status === 'In Progress');
-                        const doneItems = actionItems.filter(item => item.status === 'Done');
+                        const statusCounts = actionItems.reduce((acc, item) => {
+                            acc[item.status] = (acc[item.status] || 0) + 1; return acc;
+                        }, {});
                         const overdueItems = actionItems.filter(item => item.status !== 'Done' && item.dueDate && new Date(item.dueDate) < new Date());
 
                         content.innerHTML = `
-                            <h3 class="mb-6 text-3xl font-bold text-gray-800">Detail untuk ${selectedClinic}</h3>
-                            <div class="grid grid-cols-1 gap-6 mb-8 md:grid-cols-4 text-center">
-                                <div class="p-6 bg-white rounded-lg shadow-lg"><h4 class="mb-2 text-lg font-semibold">Total Item</h4><p class="text-5xl font-bold text-blue-600">${actionItems.length}</p></div>
-                                <div class="p-6 bg-white rounded-lg shadow-lg"><h4 class="mb-2 text-lg font-semibold">Terbuka</h4><p class="text-5xl font-bold text-yellow-600">${openItems.length}</p></div>
-                                <div class="p-6 bg-white rounded-lg shadow-lg"><h4 class="mb-2 text-lg font-semibold">Selesai</h4><p class="text-5xl font-bold text-green-600">${doneItems.length}</p></div>
-                                <div class="p-6 bg-white rounded-lg shadow-lg"><h4 class="mb-2 text-lg font-semibold">Lewat Batas</h4><p class="text-5xl font-bold text-red-600">${overdueItems.length}</p></div>
+                            <h3 class="mb-6 text-3xl font-bold text-gray-800 dark:text-white">Detail untuk ${selectedClinic}</h3>
+                             <div class="grid grid-cols-1 lg:grid-cols-3 gap-6 mb-8">
+                                <div class="lg:col-span-2 grid grid-cols-1 md:grid-cols-2 gap-6 text-center">
+                                    <div class="p-6 bg-white dark:bg-gray-800 rounded-lg shadow-lg"><h4 class="mb-2 text-lg font-semibold">Total Item</h4><p class="text-5xl font-bold text-blue-600 dark:text-blue-400">${actionItems.length}</p></div>
+                                    <div class="p-6 bg-white dark:bg-gray-800 rounded-lg shadow-lg"><h4 class="mb-2 text-lg font-semibold">Lewat Batas</h4><p class="text-5xl font-bold text-red-600 dark:text-red-400">${overdueItems.length}</p></div>
+                                </div>
+                                <div class="p-6 bg-white dark:bg-gray-800 rounded-lg shadow-lg">
+                                    <h3 class="mb-4 text-xl font-bold text-gray-800 dark:text-white">Status Item</h3>
+                                    <canvas id="clinicStatusPieChart"></canvas>
+                                </div>
                             </div>
-                            <section class="mb-8">
-                                <h4 class="mb-4 text-2xl font-bold">Meeting Terkait</h4>
-                                ${meetings.length > 0 ? `<div class="grid grid-cols-1 gap-4 md:grid-cols-2">${meetings.map(MeetingCard).join('')}</div>` : `<p>Tidak ada meeting yang melibatkan ${selectedClinic}.</p>`}
-                            </section>
                             <section>
                                 <h4 class="mb-4 text-2xl font-bold">Item Tindakan untuk ${selectedClinic}</h4>
                                 ${actionItems.length > 0 ? `<div class="grid grid-cols-1 gap-4 md:grid-cols-2 lg:grid-cols-3">
-                                    <div class="p-4 bg-gray-50 rounded-lg shadow-inner"><h5 class="mb-3 text-xl font-semibold">Open (${openItems.length})</h5><ul class="space-y-2">${openItems.map(item => ActionItemListItem(item)).join('')}</ul></div>
-                                    <div class="p-4 bg-gray-50 rounded-lg shadow-inner"><h5 class="mb-3 text-xl font-semibold">In Progress (${inProgressItems.length})</h5><ul class="space-y-2">${inProgressItems.map(item => ActionItemListItem(item)).join('')}</ul></div>
-                                    <div class="p-4 bg-gray-50 rounded-lg shadow-inner"><h5 class="mb-3 text-xl font-semibold">Done (${doneItems.length})</h5><ul class="space-y-2">${doneItems.map(item => ActionItemListItem(item)).join('')}</ul></div>
-                                </div>` : `<p>Tidak ada item tindakan untuk ${selectedClinic}.</p>`}
+                                    ${['Open', 'In Progress', 'Done'].map(status => {
+                                        const items = actionItems.filter(i => i.status === status);
+                                        return `<div class="p-4 bg-gray-50 dark:bg-gray-800 rounded-lg shadow-inner"><h5 class="mb-3 text-xl font-semibold">${status} (${items.length})</h5><ul class="space-y-2">${items.map(item => ActionItemListItem(item)).join('')}</ul></div>`;
+                                    }).join('')}
+                                </div>` : `<p class="dark:text-gray-400">Tidak ada item tindakan untuk ${selectedClinic}.</p>`}
                             </section>
                         `;
+
+                        if (actionItems.length > 0) {
+                            const pieCtx = document.getElementById('clinicStatusPieChart').getContext('2d');
+                            AppState.chartInstances.clinicPieChart = new Chart(pieCtx, {
+                                type: 'doughnut',
+                                data: {
+                                    labels: Object.keys(statusCounts),
+                                    datasets: [{ data: Object.values(statusCounts), backgroundColor: ['#FBBF24', '#3B82F6', '#10B981'] }]
+                                },
+                                options: { responsive: true, maintainAspectRatio: false, plugins: { legend: { position: 'top' } } }
+                            });
+                        }
                     });
                     AppState.listeners.push(unsubItems);
                 });
@@ -419,7 +570,6 @@
             };
             
             clinicSelect.addEventListener('change', (e) => updateDashboard(e.target.value));
-            // Initial load
             updateDashboard(clinicSelect.value);
         }
 
@@ -427,108 +577,80 @@
             const isEditMode = !!AppState.currentMeetingId;
             appRoot.querySelector('main').innerHTML = LoadingSpinner();
 
-            // Local state for the form
             let formState = {
-                date: '',
-                title: '',
-                participants: [],
-                discussionPoints: '- ',
-                clinicUpdates: {},
-                localActionItems: [],
-                initialActionItems: [] // To track deletions in edit mode
+                date: '', title: '', participants: [], discussionPoints: '- ',
+                clinicUpdates: {}, localActionItems: [], initialActionItems: []
             };
 
             const updateTitle = () => {
                 const titleEl = document.getElementById('auto-title');
                 if (formState.date) {
                     const dateObj = new Date(formState.date);
-                    if (!isNaN(dateObj.getTime())) {
-                        formState.title = `Meeting ${dateObj.toLocaleDateString('id-ID', { year: 'numeric', month: 'long', day: 'numeric' })}`;
-                    }
-                } else {
-                    formState.title = '';
-                }
+                    if (!isNaN(dateObj.getTime())) formState.title = `Meeting ${dateObj.toLocaleDateString('id-ID', { year: 'numeric', month: 'long', day: 'numeric' })}`;
+                } else formState.title = '';
                 if(titleEl) titleEl.textContent = formState.title || 'Pilih tanggal untuk membuat judul';
             };
 
             const renderLocalActionItems = () => {
-                const formState = window.currentMeetingFormState;
-                if (!formState) return;
-
+                const formState = window.currentMeetingFormState; if (!formState) return;
                 AppState.clinics.forEach(clinic => {
                     const container = document.getElementById(`action-items-for-${clinic}`);
                     if (container) {
                         const itemsForClinic = formState.localActionItems.filter(item => item.assignedTo === clinic);
-                        if (itemsForClinic.length > 0) {
-                            container.innerHTML = `
-                                <h4 class="text-sm font-semibold mt-4 mb-2 text-gray-600">Item Tindakan yang Dibawa:</h4>
-                                <ul class="space-y-2">${itemsForClinic.map(item => ActionItemListItem(item, true, true)).join('')}</ul>
-                            `;
-                        } else {
-                            container.innerHTML = '';
-                        }
+                        container.innerHTML = itemsForClinic.length > 0 ? `<h4 class="text-sm font-semibold mt-4 mb-2 text-gray-600 dark:text-gray-400">Item Tindakan yang Dibawa:</h4><ul class="space-y-2">${itemsForClinic.map(item => ActionItemListItem(item, true, true)).join('')}</ul>` : '';
                     }
                 });
             };
 
-            // Load initial data
             if (isEditMode) {
                 const docRef = doc(AppState.db, `artifacts/${AppState.appId}/users/${AppState.userId}/meetings`, AppState.currentMeetingId);
                 const docSnap = await getDoc(docRef);
                 if (docSnap.exists()) {
                     const data = docSnap.data();
-                    formState.date = formatShortDisplayDate(data.date) || '';
-                    formState.participants = data.participants || [];
-                    formState.discussionPoints = data.discussionPoints || '- ';
-                    formState.clinicUpdates = data.clinicUpdates || {};
-
+                    formState = { ...formState, ...data, date: formatShortDisplayDate(data.date) || '' };
                     const q = query(collection(AppState.db, `artifacts/${AppState.appId}/users/${AppState.userId}/actionItems`), where("meetingId", "==", AppState.currentMeetingId));
-                    const snapshot = await getDocs(q);
-                    const items = snapshot.docs.map(d => ({ id: d.id, ...d.data() }));
+                    const items = (await getDocs(q)).docs.map(d => ({ id: d.id, ...d.data() }));
                     formState.localActionItems = items;
-                    formState.initialActionItems = JSON.parse(JSON.stringify(items)); // Deep copy
+                    formState.initialActionItems = JSON.parse(JSON.stringify(items));
                 }
             } else {
-                // For new meetings, carry over open action items
                 const q = query(collection(AppState.db, `artifacts/${AppState.appId}/users/${AppState.userId}/actionItems`), where('status', '!=', 'Done'));
-                const snapshot = await getDocs(q);
-                const items = snapshot.docs.map(d => ({ id: d.id, ...d.data() }));
+                const items = (await getDocs(q)).docs.map(d => ({ id: d.id, ...d.data() }));
                 formState.localActionItems = items;
                 formState.initialActionItems = JSON.parse(JSON.stringify(items));
             }
             
-            // Render the form HTML
             appRoot.querySelector('main').innerHTML = `
                 <div class="p-6">
-                    <h2 class="mb-6 text-4xl font-extrabold text-gray-900">${isEditMode ? 'Edit Meeting' : 'Meeting Baru'}</h2>
-                    <form id="meeting-form" class="p-8 bg-white rounded-lg shadow-xl">
+                    <h2 class="mb-6 text-4xl font-extrabold text-gray-900 dark:text-white">${isEditMode ? 'Edit Meeting' : 'Meeting Baru'}</h2>
+                    <form id="meeting-form" class="p-8 bg-white dark:bg-gray-800 rounded-lg shadow-xl">
                         <div class="mb-6">
-                            <label for="date" class="block mb-2 text-sm font-medium text-gray-700">Tanggal Meeting</label>
-                            <input type="date" id="date" value="${formState.date}" class="w-full px-4 py-2 bg-gray-50 border border-gray-300 rounded-md" required />
+                            <label for="date" class="block mb-2 text-sm font-medium text-gray-700 dark:text-gray-300">Tanggal Meeting</label>
+                            <input type="date" id="date" value="${formState.date}" class="w-full px-4 py-2 bg-gray-50 dark:bg-gray-700 border border-gray-300 dark:border-gray-600 rounded-md" required />
                         </div>
                         <div class="mb-6">
-                            <label class="block mb-2 text-sm font-medium text-gray-700">Judul Meeting Otomatis</label>
-                            <p id="auto-title" class="w-full px-4 py-2 bg-gray-100 border rounded-md"></p>
+                            <label class="block mb-2 text-sm font-medium text-gray-700 dark:text-gray-300">Judul Meeting Otomatis</label>
+                            <p id="auto-title" class="w-full px-4 py-2 bg-gray-100 dark:bg-gray-700 border dark:border-gray-600 rounded-md"></p>
                         </div>
                         <div class="mb-6">
-                            <label class="block mb-2 text-sm font-medium text-gray-700">Peserta</label>
-                            <div id="participants-container" class="grid grid-cols-2 gap-2 md:grid-cols-3">
+                            <label class="block mb-2 text-sm font-medium text-gray-700 dark:text-gray-300">Peserta</label>
+                            <div class="grid grid-cols-2 gap-2 md:grid-cols-3">
                                 <div class="flex items-center"><input type="checkbox" id="participant-all" class="w-4 h-4 text-blue-600 rounded" /><label for="participant-all" class="ml-2">Semua</label></div>
                                 ${AppState.clinics.map(c => `<div class="flex items-center"><input type="checkbox" id="p-${c}" data-clinic="${c}" class="w-4 h-4 text-blue-600 rounded participant-checkbox" ${formState.participants.includes(c) ? 'checked' : ''} /><label for="p-${c}" class="ml-2">${c}</label></div>`).join('')}
                             </div>
                         </div>
                         <div class="mb-6">
-                            <label for="discussionPoints" class="block mb-2 text-sm font-medium text-gray-700">Diskusi Umum</label>
-                            <textarea id="discussionPoints" rows="5" class="w-full px-4 py-2 bg-gray-50 border rounded-md" placeholder="Catat poin diskusi...">${formState.discussionPoints}</textarea>
+                            <label for="discussionPoints" class="block mb-2 text-sm font-medium text-gray-700 dark:text-gray-300">Diskusi Umum</label>
+                            <textarea id="discussionPoints" rows="5" class="w-full px-4 py-2 bg-gray-50 dark:bg-gray-700 border dark:border-gray-600 rounded-md" placeholder="Catat poin diskusi...">${formState.discussionPoints}</textarea>
                         </div>
                         <div class="mb-6">
-                            <label class="block mb-2 text-sm font-medium text-gray-700">Pembaruan dari Klinik</label>
+                            <label class="block mb-2 text-sm font-medium text-gray-700 dark:text-gray-300">Pembaruan dari Klinik</label>
                             <div class="space-y-4">
                                 ${AppState.clinics.map(clinic => `
-                                    <div class="p-4 border rounded-lg">
+                                    <div class="p-4 border dark:border-gray-600 rounded-lg">
                                         <label for="update-${clinic}" class="mb-2 text-lg font-semibold">${clinic}:</label>
                                         <div class="flex items-center space-x-2">
-                                            <textarea id="update-${clinic}" data-clinic="${clinic}" rows="2" class="clinic-update-textarea flex-grow px-4 py-2 bg-gray-50 border rounded-md" placeholder="Pembaruan untuk ${clinic}...">${formState.clinicUpdates[clinic] || '- '}</textarea>
+                                            <textarea id="update-${clinic}" data-clinic="${clinic}" rows="2" class="clinic-update-textarea flex-grow px-4 py-2 bg-gray-50 dark:bg-gray-700 border dark:border-gray-600 rounded-md" placeholder="Pembaruan untuk ${clinic}...">${formState.clinicUpdates[clinic] || '- '}</textarea>
                                             <button type="button" data-action="add-local-action-item" data-clinic="${clinic}" class="px-3 py-2 text-sm text-white bg-blue-500 rounded-md hover:bg-blue-600" title="+ Item untuk ${clinic}">+ Item</button>
                                         </div>
                                         <div id="action-items-for-${clinic}" class="mt-3"></div>
@@ -537,394 +659,129 @@
                             </div>
                         </div>
                         <div class="flex justify-end space-x-4 mt-8">
-                            <button type="button" data-action="navigate" data-page="${isEditMode ? 'meeting-detail' : 'meetings'}" data-id="${AppState.currentMeetingId || ''}" class="px-6 py-2 text-gray-700 bg-gray-200 rounded-md hover:bg-gray-300">Batal</button>
+                            <button type="button" data-action="navigate" data-page="${isEditMode ? 'meeting-detail' : 'meetings'}" data-id="${AppState.currentMeetingId || ''}" class="px-6 py-2 text-gray-700 bg-gray-200 dark:bg-gray-600 dark:text-gray-200 rounded-md hover:bg-gray-300 dark:hover:bg-gray-500">Batal</button>
                             <button type="submit" class="px-6 py-2 text-white bg-blue-600 rounded-md hover:bg-blue-700">${isEditMode ? 'Simpan Perubahan' : 'Buat Meeting'}</button>
                         </div>
                     </form>
                 </div>`;
             
-            // Expose formState to be accessible by modal callbacks and render functions
-            window.currentMeetingFormState = formState;
-            window.renderLocalActionItems = renderLocalActionItems;
+            window.currentMeetingFormState = formState; window.renderLocalActionItems = renderLocalActionItems;
+            updateTitle(); renderLocalActionItems();
 
-            updateTitle();
-            renderLocalActionItems(); // Initial render of action items
-
-            // Add event listeners to the new form
             const form = document.getElementById('meeting-form');
             form.addEventListener('submit', (e) => handleMeetingFormSubmit(e, formState, isEditMode));
-            
-            document.getElementById('date').addEventListener('change', (e) => {
-                formState.date = e.target.value;
-                updateTitle();
-            });
-
-            document.getElementById('participant-all').addEventListener('change', (e) => {
-                const checkboxes = document.querySelectorAll('.participant-checkbox');
-                checkboxes.forEach(cb => cb.checked = e.target.checked);
-                formState.participants = e.target.checked ? [...AppState.clinics] : [];
-            });
-
-            document.querySelectorAll('.participant-checkbox').forEach(cb => {
-                cb.addEventListener('change', (e) => {
-                    const clinic = e.target.dataset.clinic;
-                    if (e.target.checked) {
-                        if (!formState.participants.includes(clinic)) formState.participants.push(clinic);
-                    } else {
-                        formState.participants = formState.participants.filter(p => p !== clinic);
-                    }
-                });
-            });
-
-            document.querySelectorAll('.clinic-update-textarea').forEach(ta => {
-                ta.addEventListener('input', (e) => {
-                    formState.clinicUpdates[e.target.dataset.clinic] = e.target.value;
-                });
-            });
-            
-            document.getElementById('discussionPoints').addEventListener('input', (e) => {
-                formState.discussionPoints = e.target.value;
-            });
+            document.getElementById('date').addEventListener('change', (e) => { formState.date = e.target.value; updateTitle(); });
+            document.getElementById('participant-all').addEventListener('change', (e) => { document.querySelectorAll('.participant-checkbox').forEach(cb => cb.checked = e.target.checked); formState.participants = e.target.checked ? [...AppState.clinics] : []; });
+            document.querySelectorAll('.participant-checkbox').forEach(cb => cb.addEventListener('change', (e) => { const c = e.target.dataset.clinic; if (e.target.checked) { if (!formState.participants.includes(c)) formState.participants.push(c); } else { formState.participants = formState.participants.filter(p => p !== c); }}));
+            document.querySelectorAll('.clinic-update-textarea').forEach(ta => ta.addEventListener('input', (e) => { formState.clinicUpdates[e.target.dataset.clinic] = e.target.value; }));
+            document.getElementById('discussionPoints').addEventListener('input', (e) => { formState.discussionPoints = e.target.value; });
         }
 
-        // --- AUTHENTICATION FUNCTIONS ---
+        // --- AUTHENTICATION & INITIALIZATION ---
 
         async function signInWithGoogle() {
             const provider = new GoogleAuthProvider();
-            try {
-                await signInWithPopup(AppState.auth, provider);
-            } catch (error) {
-                console.error("Error signing in with Google:", error);
-                 // Display error on the login page
-                const errorElement = document.getElementById('auth-error');
-                if(errorElement) errorElement.textContent = "Gagal login dengan Google. Silakan coba lagi.";
-            }
+            try { await signInWithPopup(AppState.auth, provider); } 
+            catch (error) { console.error("Error signing in:", error); const errEl = document.getElementById('auth-error'); if(errEl) errEl.textContent = "Gagal login. Silakan coba lagi."; }
         }
 
         async function signOutUser() {
-            try {
-                await signOut(AppState.auth);
-            } catch (error) {
-                console.error("Error signing out:", error);
-                alert("Gagal logout.");
-            }
+            try { await signOut(AppState.auth); } 
+            catch (error) { console.error("Error signing out:", error); alert("Gagal logout."); }
         }
 
-        // --- EVENT HANDLERS & ACTIONS ---
-        
         appRoot.addEventListener('click', async (e) => {
             const target = e.target.closest('[data-action]');
             if (!target) return;
-
-            const action = target.dataset.action;
-            const id = target.dataset.id;
-            const page = target.dataset.page;
-            const clinic = target.dataset.clinic;
-
+            const action = target.dataset.action, id = target.dataset.id, page = target.dataset.page, clinic = target.dataset.clinic;
             switch (action) {
-                case 'navigate':
-                    navigateTo(page, id);
-                    break;
-                case 'login-google':
-                    await signInWithGoogle();
-                    break;
-                case 'logout':
-                    await signOutUser();
-                    break;
-                case 'export-excel':
-                    exportAllDataToExcel();
-                    break;
-                case 'delete-meeting':
-                    showConfirmationModal("Konfirmasi Hapus Meeting", "Anda yakin ingin menghapus meeting ini dan semua item tindakannya? Tindakan ini tidak dapat dibatalkan.", () => handleDeleteMeeting(id));
-                    break;
-                case 'add-action-item':
-                    showActionItemFormModal({ meetingId: AppState.currentMeetingId });
-                    break;
-                case 'edit-action-item':
-                    {
-                        const itemRef = doc(AppState.db, `artifacts/${AppState.appId}/users/${AppState.userId}/actionItems`, id);
-                        const itemSnap = await getDoc(itemRef);
-                        if (itemSnap.exists()) {
-                            showActionItemFormModal({ selectedActionItem: {id, ...itemSnap.data()}, meetingId: AppState.currentMeetingId });
-                        }
-                    }
-                    break;
-                case 'delete-action-item':
-                    showConfirmationModal("Konfirmasi Hapus Item", "Anda yakin ingin menghapus item tindakan ini?", () => handleDeleteActionItem(id));
-                    break;
-                case 'add-local-action-item':
-                    showActionItemFormModal({ onSaveLocally: handleSaveLocallyActionItem, clinicToAssignAction: clinic });
-                    break;
-                case 'edit-local-action-item':
-                    {
-                        const itemToEdit = window.currentMeetingFormState.localActionItems.find(i => i.id.toString() === id);
-                        if(itemToEdit) showActionItemFormModal({ onSaveLocally: handleSaveLocallyActionItem, selectedActionItem: itemToEdit });
-                    }
-                    break;
-                case 'delete-local-action-item':
-                    showConfirmationModal("Konfirmasi Hapus Item", "Anda yakin ingin menghapus item tindakan ini dari daftar?", () => {
-                        window.currentMeetingFormState.localActionItems = window.currentMeetingFormState.localActionItems.filter(i => i.id.toString() !== id);
-                        window.renderLocalActionItems();
-                    });
-                    break;
+                case 'navigate': navigateTo(page, id); break;
+                case 'login-google': await signInWithGoogle(); break;
+                case 'logout': await signOutUser(); break;
+                case 'toggle-theme': toggleTheme(); const light = document.getElementById('theme-icon-light'); const dark = document.getElementById('theme-icon-dark'); light.classList.toggle('hidden'); dark.classList.toggle('hidden'); break;
+                case 'export-excel': exportAllDataToExcel(); break;
+                case 'delete-meeting': showConfirmationModal("Konfirmasi Hapus Meeting", "Anda yakin ingin menghapus meeting ini dan semua item tindakannya?", () => handleDeleteMeeting(id)); break;
+                case 'add-action-item': showActionItemFormModal({ meetingId: AppState.currentMeetingId }); break;
+                case 'edit-action-item': { const item = await getDoc(doc(AppState.db, `artifacts/${AppState.appId}/users/${AppState.userId}/actionItems`, id)); if (item.exists()) showActionItemFormModal({ selectedActionItem: {id, ...item.data()}, meetingId: AppState.currentMeetingId }); } break;
+                case 'delete-action-item': showConfirmationModal("Konfirmasi Hapus Item", "Anda yakin ingin menghapus item tindakan ini?", () => handleDeleteActionItem(id)); break;
+                case 'add-local-action-item': showActionItemFormModal({ onSaveLocally: handleSaveLocallyActionItem, clinicToAssignAction: clinic }); break;
+                case 'edit-local-action-item': { const item = window.currentMeetingFormState.localActionItems.find(i => i.id.toString() === id); if(item) showActionItemFormModal({ onSaveLocally: handleSaveLocallyActionItem, selectedActionItem: item }); } break;
+                case 'delete-local-action-item': showConfirmationModal("Konfirmasi Hapus Item", "Anda yakin ingin menghapus item ini?", () => { window.currentMeetingFormState.localActionItems = window.currentMeetingFormState.localActionItems.filter(i => i.id.toString() !== id); window.renderLocalActionItems(); }); break;
+            }
+        });
+
+        // Search form submission
+        appRoot.addEventListener('submit', (e) => {
+            if (e.target.id === 'global-search-form') {
+                e.preventDefault();
+                const searchInput = document.getElementById('global-search-input');
+                const searchTerm = searchInput.value.trim();
+                if (searchTerm) navigateTo('search-results', searchTerm);
             }
         });
 
         async function handleMeetingFormSubmit(e, formState, isEditMode) {
             e.preventDefault();
-            if (!AppState.db || !AppState.userId) return;
-
-            const meetingData = { 
-                title: formState.title, 
-                date: formState.date || null, 
-                participants: formState.participants, 
-                discussionPoints: formState.discussionPoints, 
-                clinicUpdates: formState.clinicUpdates, 
-                updatedAt: serverTimestamp() 
-            };
-
+            const meetingData = { title: formState.title, date: formState.date || null, participants: formState.participants, discussionPoints: formState.discussionPoints, clinicUpdates: formState.clinicUpdates, updatedAt: serverTimestamp() };
             try {
                 if (isEditMode) {
                     const meetingId = AppState.currentMeetingId;
                     const batch = writeBatch(AppState.db);
-                    const meetingRef = doc(AppState.db, `artifacts/${AppState.appId}/users/${AppState.userId}/meetings`, meetingId);
-                    batch.update(meetingRef, meetingData);
-
-                    formState.localActionItems.forEach(item => {
-                        const isExisting = formState.initialActionItems.some(initial => initial.id === item.id);
-                        const { id, ...itemData } = item;
-                        if (isExisting) {
-                            batch.update(doc(AppState.db, `artifacts/${AppState.appId}/users/${AppState.userId}/actionItems`, id), itemData);
-                        } else {
-                            const newItemRef = doc(collection(AppState.db, `artifacts/${AppState.appId}/users/${AppState.userId}/actionItems`));
-                            batch.set(newItemRef, { ...itemData, meetingId, createdAt: serverTimestamp() });
-                        }
-                    });
-
-                    const deletedItemIds = formState.initialActionItems.filter(initial => !formState.localActionItems.some(local => local.id === initial.id)).map(item => item.id);
-                    deletedItemIds.forEach(id => {
-                        batch.delete(doc(AppState.db, `artifacts/${AppState.appId}/users/${AppState.userId}/actionItems`, id));
-                    });
-
-                    await batch.commit();
-                    navigateTo('meeting-detail', meetingId);
+                    batch.update(doc(AppState.db, `artifacts/${AppState.appId}/users/${AppState.userId}/meetings`, meetingId), meetingData);
+                    formState.localActionItems.forEach(item => { const { id, ...data } = item; if (formState.initialActionItems.some(i => i.id === id)) batch.update(doc(AppState.db, `artifacts/${AppState.appId}/users/${AppState.userId}/actionItems`, id), data); else batch.set(doc(collection(AppState.db, `artifacts/${AppState.appId}/users/${AppState.userId}/actionItems`)), { ...data, meetingId, createdAt: serverTimestamp() }); });
+                    formState.initialActionItems.filter(i => !formState.localActionItems.some(l => l.id === i.id)).forEach(item => batch.delete(doc(AppState.db, `artifacts/${AppState.appId}/users/${AppState.userId}/actionItems`, item.id)));
+                    await batch.commit(); navigateTo('meeting-detail', meetingId);
                 } else {
                     const docRef = await addDoc(collection(AppState.db, `artifacts/${AppState.appId}/users/${AppState.userId}/meetings`), { ...meetingData, createdAt: serverTimestamp() });
-                    const newMeetingId = docRef.id;
-                    const batch = writeBatch(AppState.db);
-                    
-                    formState.localActionItems.forEach(item => {
-                        if (item.createdAt) { // It's an existing item carried over
-                            batch.update(doc(AppState.db, `artifacts/${AppState.appId}/users/${AppState.userId}/actionItems`, item.id), { meetingId: newMeetingId });
-                        } else { // It's a new item created in the form
-                            const newItemRef = doc(collection(AppState.db, `artifacts/${AppState.appId}/users/${AppState.userId}/actionItems`));
-                            const { id, ...itemDataToSave } = item;
-                            batch.set(newItemRef, { ...itemDataToSave, meetingId: newMeetingId, createdAt: serverTimestamp() });
-                        }
-                    });
-                    await batch.commit();
-                    navigateTo('meeting-detail', newMeetingId);
+                    const newMeetingId = docRef.id; const batch = writeBatch(AppState.db);
+                    formState.localActionItems.forEach(item => { const { id, ...data } = item; if (item.createdAt) batch.update(doc(AppState.db, `artifacts/${AppState.appId}/users/${AppState.userId}/actionItems`, id), { meetingId: newMeetingId }); else batch.set(doc(collection(AppState.db, `artifacts/${AppState.appId}/users/${AppState.userId}/actionItems`)), { ...data, meetingId: newMeetingId, createdAt: serverTimestamp() }); });
+                    await batch.commit(); navigateTo('meeting-detail', newMeetingId);
                 }
-            } catch (err) {
-                console.error("Error saving meeting:", err);
-                alert("Gagal menyimpan meeting.");
-            }
+            } catch (err) { console.error("Error saving meeting:", err); alert("Gagal menyimpan meeting."); }
         }
 
         function handleSaveLocallyActionItem(item) {
-            const formState = window.currentMeetingFormState;
-            const existingIndex = formState.localActionItems.findIndex(i => i.id === item.id);
-            if (existingIndex > -1) {
-                formState.localActionItems[existingIndex] = item;
-            } else {
-                formState.localActionItems.push(item);
-            }
+            const state = window.currentMeetingFormState; const index = state.localActionItems.findIndex(i => i.id === item.id);
+            if (index > -1) state.localActionItems[index] = item; else state.localActionItems.push(item);
             window.renderLocalActionItems();
         }
 
         async function handleDeleteMeeting(meetingId) {
-            if (!AppState.db || !AppState.userId || !meetingId) return;
             try {
                 const batch = writeBatch(AppState.db);
-                const itemsQuery = query(collection(AppState.db, `artifacts/${AppState.appId}/users/${AppState.userId}/actionItems`), where("meetingId", "==", meetingId));
-                const itemsSnapshot = await getDocs(itemsQuery);
-                itemsSnapshot.forEach(doc => batch.delete(doc.ref));
+                const items = await getDocs(query(collection(AppState.db, `artifacts/${AppState.appId}/users/${AppState.userId}/actionItems`), where("meetingId", "==", meetingId)));
+                items.forEach(doc => batch.delete(doc.ref));
                 batch.delete(doc(AppState.db, `artifacts/${AppState.appId}/users/${AppState.userId}/meetings`, meetingId));
-                await batch.commit();
-                navigateTo('meetings');
-            } catch (err) {
-                console.error("Error deleting meeting:", err);
-                alert("Gagal menghapus meeting.");
-            }
+                await batch.commit(); navigateTo('meetings');
+            } catch (err) { console.error("Error deleting meeting:", err); alert("Gagal menghapus meeting."); }
         }
 
         async function handleDeleteActionItem(itemId) {
-            if (!AppState.db || !AppState.userId || !itemId) return;
-            try {
-                await deleteDoc(doc(AppState.db, `artifacts/${AppState.appId}/users/${AppState.userId}/actionItems`, itemId));
-            } catch (err) {
-                console.error("Error deleting action item:", err);
-                alert("Gagal menghapus item tindakan.");
-            }
+            try { await deleteDoc(doc(AppState.db, `artifacts/${AppState.appId}/users/${AppState.userId}/actionItems`, itemId)); } 
+            catch (err) { console.error("Error deleting item:", err); alert("Gagal menghapus item."); }
         }
 
-        // --- MODAL FUNCTIONS ---
+        // --- MODALS, EXPORT, ROUTING ---
 
         function showConfirmationModal(title, message, onConfirm) {
             const modalId = `modal-${Date.now()}`;
-            const modalHTML = `
-                <div id="${modalId}" class="fixed inset-0 z-50 flex items-center justify-center bg-black bg-opacity-50">
-                    <div class="w-full max-w-sm p-6 bg-white rounded-lg shadow-lg">
-                        <h3 class="mb-4 text-xl font-semibold text-gray-900">${title}</h3>
-                        <p class="mb-6 text-gray-700">${message}</p>
-                        <div class="flex justify-end space-x-3">
-                            <button data-action="cancel" class="px-4 py-2 text-gray-700 bg-gray-200 rounded-md hover:bg-gray-300">Batal</button>
-                            <button data-action="confirm" class="px-4 py-2 text-white bg-red-600 rounded-md hover:bg-red-700">Konfirmasi</button>
-                        </div>
-                    </div>
-                </div>`;
-            modalContainer.insertAdjacentHTML('beforeend', modalHTML);
-            
+            modalContainer.insertAdjacentHTML('beforeend', `<div id="${modalId}" class="fixed inset-0 z-50 flex items-center justify-center bg-black bg-opacity-50"><div class="w-full max-w-sm p-6 bg-white dark:bg-gray-800 rounded-lg shadow-lg"><h3 class="mb-4 text-xl font-semibold text-gray-900 dark:text-white">${title}</h3><p class="mb-6 text-gray-700 dark:text-gray-300">${message}</p><div class="flex justify-end space-x-3"><button data-action="cancel" class="px-4 py-2 text-gray-700 bg-gray-200 dark:bg-gray-600 dark:text-gray-200 rounded-md hover:bg-gray-300 dark:hover:bg-gray-500">Batal</button><button data-action="confirm" class="px-4 py-2 text-white bg-red-600 rounded-md hover:bg-red-700">Konfirmasi</button></div></div></div>`);
             const modalElement = document.getElementById(modalId);
-            modalElement.addEventListener('click', (e) => {
-                const action = e.target.dataset.action;
-                if (action === 'confirm') {
-                    onConfirm();
-                    modalElement.remove();
-                } else if (action === 'cancel') {
-                    modalElement.remove();
-                }
-            });
+            modalElement.addEventListener('click', (e) => { if (e.target.dataset.action === 'confirm') onConfirm(); if (e.target.dataset.action) modalElement.remove(); });
         }
-
+        
         function showActionItemFormModal({ onSaveLocally, meetingId, selectedActionItem, clinicToAssignAction }) {
-            const modalId = `modal-form-${Date.now()}`;
-            const isEditMode = !!selectedActionItem;
-            
-            let itemState = {
-                id: isEditMode ? selectedActionItem.id : Date.now().toString(),
-                title: isEditMode ? selectedActionItem.title || '' : '',
-                assignedTo: isEditMode ? selectedActionItem.assignedTo || '' : clinicToAssignAction || '',
-                dueDate: isEditMode ? formatShortDisplayDate(selectedActionItem.dueDate) : '',
-                status: isEditMode ? selectedActionItem.status || 'Open' : 'Open',
-                followUps: isEditMode ? JSON.parse(JSON.stringify(selectedActionItem.followUps || [])) : [],
-            };
-            
-            const renderFollowUps = () => {
-                const container = document.getElementById(`${modalId}-followups`);
-                if (!container) return;
-                container.innerHTML = itemState.followUps.map((fu, index) => `
-                    <li class="flex items-start justify-between p-3 bg-gray-100 rounded-md">
-                        <div>
-                            <p class="text-sm font-medium text-gray-900">Tanggal: ${formatShortDisplayDate(fu.followUpDate)}</p>
-                            <p class="text-sm text-gray-700">${fu.followUpDetail}</p>
-                        </div>
-                        <button type="button" data-action="remove-followup" data-index="${index}" class="ml-4 text-red-500 hover:text-red-700" title="Hapus Follow-up">
-                             <svg xmlns="http://www.w3.org/2000/svg" class="w-5 h-5 pointer-events-none" viewBox="0 0 20 20" fill="currentColor"><path fill-rule="evenodd" d="M9 2a1 1 0 00-.894.553L7.382 4H4a1 1 0 000 2v10a2 2 0 002 2h8a2 2 0 002-2V6a1 1 0 100-2h-3.382l-.724-1.447A1 1 0 0011 2H9zM7 8a1 1 0 012 0v6a1 1 0 11-2 0V8zm5-1a1 1 0 00-1 1v6a1 1 0 102 0V8a1 1 0 00-1-1z" clip-rule="evenodd" /></svg>
-                        </button>
-                    </li>
-                `).join('');
-            };
-
-            const modalHTML = `
-                <div id="${modalId}" class="fixed inset-0 z-50 flex items-center justify-center bg-black bg-opacity-50 p-4">
-                    <div class="w-full max-w-lg p-6 bg-white rounded-lg shadow-lg flex flex-col max-h-[90vh]">
-                        <h3 class="mb-6 text-2xl font-semibold text-gray-900 flex-shrink-0">${isEditMode ? 'Edit Item Tindakan' : 'Item Tindakan Baru'}</h3>
-                        <form id="${modalId}-form" class="flex flex-col flex-grow min-h-0">
-                            <div class="flex-grow overflow-y-auto pr-4 -mr-4">
-                                <div class="mb-4">
-                                    <label class="block mb-2 text-sm font-medium text-gray-700">Judul Item Tindakan</label>
-                                    <input type="text" name="title" value="${itemState.title}" class="w-full px-4 py-2 bg-gray-50 border border-gray-300 rounded-md" required />
-                                </div>
-                                <div class="mb-4">
-                                    <label class="block mb-2 text-sm font-medium text-gray-700">Ditugaskan kepada</label>
-                                    <select name="assignedTo" class="w-full px-4 py-2 bg-gray-50 border border-gray-300 rounded-md" required>
-                                        <option value="">Pilih Klinik</option>
-                                        ${AppState.clinics.map(c => `<option value="${c}" ${itemState.assignedTo === c ? 'selected' : ''}>${c}</option>`).join('')}
-                                    </select>
-                                </div>
-                                <div class="mb-4">
-                                    <label class="block mb-2 text-sm font-medium text-gray-700">Batas Waktu</label>
-                                    <input type="date" name="dueDate" value="${itemState.dueDate}" class="w-full px-4 py-2 bg-gray-50 border border-gray-300 rounded-md" />
-                                </div>
-                                <div class="mb-6">
-                                    <label class="block mb-2 text-sm font-medium text-gray-700">Status</label>
-                                    <select name="status" class="w-full px-4 py-2 bg-gray-50 border border-gray-300 rounded-md">
-                                        ${['Open', 'In Progress', 'Done'].map(s => `<option value="${s}" ${itemState.status === s ? 'selected' : ''}>${s}</option>`).join('')}
-                                    </select>
-                                </div>
-                                <div class="pt-4 mt-4 mb-6 border-t border-gray-200">
-                                    <h4 class="mb-3 text-lg font-semibold text-gray-800">Follow-up</h4>
-                                    <ul id="${modalId}-followups" class="mb-4 space-y-2"></ul>
-                                    <div class="flex flex-col space-y-2">
-                                        <input type="date" id="${modalId}-fu-date" class="w-full px-4 py-2 bg-gray-50 border border-gray-300 rounded-md" />
-                                        <textarea id="${modalId}-fu-detail" rows="2" class="w-full px-4 py-2 bg-gray-50 border border-gray-300 rounded-md" placeholder="Catat detail follow-up..."></textarea>
-                                        <button type="button" data-action="add-followup" class="px-4 py-2 text-sm text-white bg-green-600 rounded-md hover:bg-green-700">Tambah Follow-up</button>
-                                    </div>
-                                </div>
-                            </div>
-                            <div class="flex justify-end pt-4 mt-auto space-x-3 border-t border-gray-200 flex-shrink-0">
-                                <button type="button" data-action="cancel" class="px-4 py-2 text-gray-700 bg-gray-200 rounded-md hover:bg-gray-300">Batal</button>
-                                <button type="submit" class="px-4 py-2 text-white bg-blue-600 rounded-md hover:bg-blue-700">${isEditMode ? 'Simpan Perubahan' : 'Tambah Item'}</button>
-                            </div>
-                        </form>
-                    </div>
-                </div>`;
-            modalContainer.insertAdjacentHTML('beforeend', modalHTML);
-            renderFollowUps();
-
-            const modalElement = document.getElementById(modalId);
-            const formElement = document.getElementById(`${modalId}-form`);
-            
-            modalElement.addEventListener('click', (e) => {
-                const action = e.target.dataset.action;
-                if(action === 'cancel') modalElement.remove();
-                if(action === 'add-followup') {
-                    const dateInput = document.getElementById(`${modalId}-fu-date`);
-                    const detailInput = document.getElementById(`${modalId}-fu-detail`);
-                    if(dateInput.value && detailInput.value) {
-                        itemState.followUps.push({ followUpDate: dateInput.value, followUpDetail: detailInput.value });
-                        dateInput.value = '';
-                        detailInput.value = '';
-                        renderFollowUps();
-                    }
-                }
-                if(action === 'remove-followup') {
-                    itemState.followUps.splice(e.target.dataset.index, 1);
-                    renderFollowUps();
-                }
-            });
-
-            formElement.addEventListener('submit', async (e) => {
-                e.preventDefault();
-                const formData = new FormData(formElement);
-                const finalItem = {
-                    ...itemState,
-                    title: formData.get('title'),
-                    assignedTo: formData.get('assignedTo'),
-                    dueDate: formData.get('dueDate') || null,
-                    status: formData.get('status'),
-                };
-
-                if (onSaveLocally) {
-                    onSaveLocally(finalItem);
-                } else if (meetingId) {
-                    const { id, ...itemData } = finalItem;
-                    if (isEditMode) {
-                        await updateDoc(doc(AppState.db, `artifacts/${AppState.appId}/users/${AppState.userId}/actionItems`, id), {...itemData, updatedAt: serverTimestamp()});
-                    } else {
-                        await addDoc(collection(AppState.db, `artifacts/${AppState.appId}/users/${AppState.userId}/actionItems`), {...itemData, meetingId, createdAt: serverTimestamp()});
-                    }
-                }
-                modalElement.remove();
-            });
+            const modalId = `modal-form-${Date.now()}`, isEditMode = !!selectedActionItem;
+            let itemState = { id: isEditMode ? selectedActionItem.id : Date.now().toString(), title: isEditMode ? selectedActionItem.title || '' : '', assignedTo: isEditMode ? selectedActionItem.assignedTo || '' : clinicToAssignAction || '', dueDate: isEditMode ? formatShortDisplayDate(selectedActionItem.dueDate) : '', status: isEditMode ? selectedActionItem.status || 'Open' : 'Open', followUps: isEditMode ? JSON.parse(JSON.stringify(selectedActionItem.followUps || [])) : [] };
+            const renderFollowUps = () => document.getElementById(`${modalId}-followups`).innerHTML = itemState.followUps.map((fu, i) => `<li class="flex items-start justify-between p-3 bg-gray-100 dark:bg-gray-700 rounded-md"><div><p class="text-sm font-medium text-gray-900 dark:text-white">Tanggal: ${formatShortDisplayDate(fu.followUpDate)}</p><p class="text-sm text-gray-700 dark:text-gray-300">${fu.followUpDetail}</p></div><button type="button" data-action="remove-followup" data-index="${i}" class="ml-4 text-red-500 hover:text-red-700" title="Hapus Follow-up"><svg xmlns="http://www.w3.org/2000/svg" class="w-5 h-5 pointer-events-none" viewBox="0 0 20 20" fill="currentColor"><path fill-rule="evenodd" d="M9 2a1 1 0 00-.894.553L7.382 4H4a1 1 0 000 2v10a2 2 0 002 2h8a2 2 0 002-2V6a1 1 0 100-2h-3.382l-.724-1.447A1 1 0 0011 2H9zM7 8a1 1 0 012 0v6a1 1 0 11-2 0V8zm5-1a1 1 0 00-1 1v6a1 1 0 102 0V8a1 1 0 00-1-1z" clip-rule="evenodd" /></svg></button></li>`).join('');
+            modalContainer.insertAdjacentHTML('beforeend', `<div id="${modalId}" class="fixed inset-0 z-50 flex items-center justify-center bg-black bg-opacity-50 p-4"><div class="w-full max-w-lg p-6 bg-white dark:bg-gray-800 rounded-lg shadow-lg flex flex-col max-h-[90vh]"><h3 class="mb-6 text-2xl font-semibold text-gray-900 dark:text-white flex-shrink-0">${isEditMode ? 'Edit Item Tindakan' : 'Item Tindakan Baru'}</h3><form id="${modalId}-form" class="flex flex-col flex-grow min-h-0"><div class="flex-grow overflow-y-auto pr-4 -mr-4"><div class="mb-4"><label class="block mb-2 text-sm font-medium text-gray-700 dark:text-gray-300">Judul</label><input type="text" name="title" value="${itemState.title}" class="w-full px-4 py-2 bg-gray-50 dark:bg-gray-700 border dark:border-gray-600 rounded-md" required /></div><div class="mb-4"><label class="block mb-2 text-sm font-medium text-gray-700 dark:text-gray-300">Ditugaskan</label><select name="assignedTo" class="w-full px-4 py-2 bg-gray-50 dark:bg-gray-700 border dark:border-gray-600 rounded-md" required><option value="">Pilih</option>${AppState.clinics.map(c => `<option value="${c}" ${itemState.assignedTo === c ? 'selected' : ''}>${c}</option>`).join('')}</select></div><div class="mb-4"><label class="block mb-2 text-sm font-medium text-gray-700 dark:text-gray-300">Batas Waktu</label><input type="date" name="dueDate" value="${itemState.dueDate}" class="w-full px-4 py-2 bg-gray-50 dark:bg-gray-700 border dark:border-gray-600 rounded-md" /></div><div class="mb-6"><label class="block mb-2 text-sm font-medium text-gray-700 dark:text-gray-300">Status</label><select name="status" class="w-full px-4 py-2 bg-gray-50 dark:bg-gray-700 border dark:border-gray-600 rounded-md">${['Open', 'In Progress', 'Done'].map(s => `<option value="${s}" ${itemState.status === s ? 'selected' : ''}>${s}</option>`).join('')}</select></div><div class="pt-4 mt-4 mb-6 border-t border-gray-200 dark:border-gray-700"><h4 class="mb-3 text-lg font-semibold text-gray-800 dark:text-white">Follow-up</h4><ul id="${modalId}-followups" class="mb-4 space-y-2"></ul><div class="flex flex-col space-y-2"><input type="date" id="${modalId}-fu-date" class="w-full px-4 py-2 bg-gray-50 dark:bg-gray-700 border dark:border-gray-600 rounded-md" /><textarea id="${modalId}-fu-detail" rows="2" class="w-full px-4 py-2 bg-gray-50 dark:bg-gray-700 border dark:border-gray-600 rounded-md" placeholder="..."></textarea><button type="button" data-action="add-followup" class="px-4 py-2 text-sm text-white bg-green-600 rounded-md hover:bg-green-700">Tambah</button></div></div></div><div class="flex justify-end pt-4 mt-auto space-x-3 border-t border-gray-200 dark:border-gray-700 flex-shrink-0"><button type="button" data-action="cancel" class="px-4 py-2 text-gray-700 bg-gray-200 dark:bg-gray-600 dark:text-gray-200 rounded-md hover:bg-gray-300 dark:hover:bg-gray-500">Batal</button><button type="submit" class="px-4 py-2 text-white bg-blue-600 rounded-md hover:bg-blue-700">${isEditMode ? 'Simpan' : 'Tambah'}</button></div></form></div></div>`);
+            renderFollowUps(); const modalEl = document.getElementById(modalId), formEl = document.getElementById(`${modalId}-form`);
+            modalEl.addEventListener('click', (e) => { const a = e.target.dataset.action; if(a==='cancel') modalEl.remove(); if(a==='add-followup'){ const d=document.getElementById(`${modalId}-fu-date`),t=document.getElementById(`${modalId}-fu-detail`); if(d.value&&t.value){itemState.followUps.push({followUpDate:d.value,followUpDetail:t.value});d.value='';t.value='';renderFollowUps();}} if(a==='remove-followup'){itemState.followUps.splice(e.target.dataset.index,1);renderFollowUps();}});
+            formEl.addEventListener('submit', async (e) => { e.preventDefault(); const fd = new FormData(formEl); const item = {...itemState, title: fd.get('title'), assignedTo: fd.get('assignedTo'), dueDate: fd.get('dueDate') || null, status: fd.get('status')}; if (onSaveLocally) onSaveLocally(item); else if (meetingId) { const { id, ...data } = item; if (isEditMode) await updateDoc(doc(AppState.db, `artifacts/${AppState.appId}/users/${AppState.userId}/actionItems`, id), {...data, updatedAt: serverTimestamp()}); else await addDoc(collection(AppState.db, `artifacts/${AppState.appId}/users/${AppState.userId}/actionItems`), {...data, meetingId, createdAt: serverTimestamp()}); } modalEl.remove(); });
         }
-
-
-        // --- EXPORT TO EXCEL ---
 
         async function exportAllDataToExcel() {
-            if (!AppState.db || !AppState.userId) { alert("Firebase belum siap."); return; }
+             if (!AppState.db || !AppState.userId) { alert("Firebase belum siap."); return; }
             if (typeof XLSX === 'undefined') { alert("Pustaka Excel belum dimuat."); return; }
             try {
                 const meetingsSnapshot = await getDocs(collection(AppState.db, `artifacts/${AppState.appId}/users/${AppState.userId}/meetings`));
@@ -943,94 +800,50 @@
                 alert("Gagal mengekspor data.");
             }
         }
-
-        // --- NAVIGATION & ROUTING ---
-
-        function navigateTo(page, id = null) {
+        
+        function navigateTo(page, param = null) {
             cleanupListeners();
             AppState.currentPage = page;
-            AppState.currentMeetingId = id;
+            if (page === 'meeting-detail' || page === 'edit-meeting') AppState.currentMeetingId = param;
+            if (page === 'search-results') AppState.currentSearchTerm = param;
             renderAppContent();
         }
 
         function renderAppContent() {
-            // This function renders the main content *after* login
             const mainContentContainer = appRoot.querySelector('main');
-            if (!mainContentContainer) return; // Should not happen if logged in
-
+            if (!mainContentContainer) return;
             switch (AppState.currentPage) {
                 case 'dashboard': renderDashboard(); break;
                 case 'meetings': renderMeetingList(); break;
                 case 'meeting-detail': renderMeetingDetail(); break;
-                case 'new-meeting':
-                case 'edit-meeting': renderMeetingForm(); break;
+                case 'new-meeting': case 'edit-meeting': renderMeetingForm(); break;
                 case 'clinic-dashboard': renderClinicDashboard(); break;
+                case 'search-results': renderSearchResults(); break;
                 default: renderDashboard();
             }
         }
 
-        // --- INITIALIZATION & MAIN RENDER LOGIC ---
-
         async function initializeFirebase() {
             try {
                 AppState.appId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
-                
-                let firebaseConfig;
-                if (typeof __firebase_config !== 'undefined' && __firebase_config) {
-                    firebaseConfig = JSON.parse(__firebase_config);
-                } else {
-                    firebaseConfig = {
-                        apiKey: "AIzaSyChAi6kfETyfENB78FAhDFrC_VHDWDRVXs",
-                        authDomain: "mymeeting-8c4b4.firebaseapp.com",
-                        projectId: "mymeeting-8c4b4",
-                        storageBucket: "mymeeting-8c4b4.firebasestorage.app",
-                        messagingSenderId: "402496368645",
-                        appId: "1:402496368645:web:6c86ab221cee6d1ee4ac6c"
-                    };
-                }
-
-                const app = initializeApp(firebaseConfig);
-                AppState.db = getFirestore(app);
-                AppState.auth = getAuth(app);
-
+                let firebaseConfig; if (typeof __firebase_config !== 'undefined' && __firebase_config) firebaseConfig = JSON.parse(__firebase_config); else firebaseConfig = { apiKey: "AIzaSyChAi6kfETyfENB78FAhDFrC_VHDWDRVXs", authDomain: "mymeeting-8c4b4.firebaseapp.com", projectId: "mymeeting-8c4b4", storageBucket: "mymeeting-8c4b4.firebasestorage.app", messagingSenderId: "402496368645", appId: "1:402496368645:web:6c86ab221cee6d1ee4ac6c" };
+                const app = initializeApp(firebaseConfig); AppState.db = getFirestore(app); AppState.auth = getAuth(app);
                 onAuthStateChanged(AppState.auth, (user) => {
                     if (user && !user.isAnonymous) {
-                        // User is logged in, now check if they are authorized
                         if (authorizedEmails.includes(user.email)) {
-                            // User is authorized, show the main app
-                            AppState.userId = user.uid;
-                            AppState.loading = false;
-                            
-                            appRoot.innerHTML = `
-                                <header id="app-header"></header>
-                                <main id="app-main"></main>
-                            `;
-                            appRoot.querySelector('#app-header').innerHTML = Header();
-                            renderAppContent();
+                            AppState.userId = user.uid; AppState.loading = false;
+                            appRoot.innerHTML = `<header id="app-header"></header><main id="app-main"></main>`;
+                            appRoot.querySelector('#app-header').innerHTML = Header(); renderAppContent();
                         } else {
-                            // User is not authorized, sign them out and show login with error
-                            const unauthorizedEmail = user.email;
-                            signOut(AppState.auth).then(() => {
-                                appRoot.innerHTML = LoginPage(`Akses ditolak. Akun ${unauthorizedEmail} tidak terdaftar.`);
-                            });
+                            const email = user.email; signOut(AppState.auth).then(() => { appRoot.innerHTML = LoginPage(`Akses ditolak untuk: ${email}`); });
                         }
                     } else {
-                        // User is not logged in, show the login page
-                        cleanupListeners();
-                        AppState.userId = null;
-                        AppState.loading = false;
-                        appRoot.innerHTML = LoginPage();
+                        cleanupListeners(); AppState.userId = null; AppState.loading = false; appRoot.innerHTML = LoginPage();
                     }
                 });
-            } catch (err) {
-                console.error("Error initializing Firebase:", err);
-                AppState.error = "Gagal menginisialisasi aplikasi. Periksa konfigurasi Firebase Anda.";
-                AppState.loading = false;
-                appRoot.innerHTML = ErrorDisplay(AppState.error);
-            }
+            } catch (err) { console.error("Firebase Init Error:", err); AppState.error = "Gagal inisialisasi Firebase."; AppState.loading = false; appRoot.innerHTML = ErrorDisplay(AppState.error); }
         }
 
-        // Start the application
         appRoot.innerHTML = LoadingSpinner();
         initializeFirebase();
 
