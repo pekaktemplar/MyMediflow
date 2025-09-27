@@ -577,8 +577,8 @@
                 case 'edit-action-item': { const item = await getDoc(doc(AppState.db, `${AppState.getSharedDataPath()}/actionItems`, id)); if (item.exists()) showActionItemFormModal({ selectedActionItem: {id, ...item.data()}, meetingId: AppState.currentMeetingId }); } break;
                 case 'delete-action-item': showConfirmationModal("Konfirmasi Hapus Item", "Anda yakin ingin menghapus item tindakan ini?", () => handleDeleteActionItem(id)); break;
                 case 'add-local-action-item': showActionItemFormModal({ onSaveLocally: handleSaveLocallyActionItem, clinicToAssignAction: clinic }); break;
-                case 'edit-local-action-item': { const item = window.currentMeetingFormState.localActionItems.find(i => i.id.toString() === id); if(item) showActionItemFormModal({ onSaveLocally: handleSaveLocallyActionItem, selectedActionItem: item }); } break;
-                case 'delete-local-action-item': showConfirmationModal("Konfirmasi Hapus Item", "Anda yakin ingin menghapus item ini?", () => { window.currentMeetingFormState.localActionItems = window.currentMeetingFormState.localActionItems.filter(i => i.id.toString() !== id); window.renderLocalActionItems(); }); break;
+                case 'edit-local-action-item': { const item = window.currentMeetingFormState.localActionItems.find(i => String(i.id) === id); if(item) showActionItemFormModal({ onSaveLocally: handleSaveLocallyActionItem, selectedActionItem: item }); } break;
+                case 'delete-local-action-item': showConfirmationModal("Konfirmasi Hapus Item", "Anda yakin ingin menghapus item ini?", () => { window.currentMeetingFormState.localActionItems = window.currentMeetingFormState.localActionItems.filter(i => String(i.id) !== id); window.renderLocalActionItems(); }); break;
             }
         });
 
@@ -625,7 +625,18 @@
             } catch (err) { console.error("Error saving meeting:", err); alert("Gagal menyimpan meeting."); }
         }
 
-        function handleSaveLocallyActionItem(item) { const state = window.currentMeetingFormState; const index = state.localActionItems.findIndex(i => i.id === item.id); if (index > -1) state.localActionItems[index] = item; else state.localActionItems.push(item); window.renderLocalActionItems(); }
+        function handleSaveLocallyActionItem(item) { 
+            const itemWithStringId = { ...item, id: String(item.id) };
+            const state = window.currentMeetingFormState; 
+            const index = state.localActionItems.findIndex(i => String(i.id) === String(item.id)); 
+            if (index > -1) {
+                state.localActionItems[index] = itemWithStringId; 
+            } else {
+                state.localActionItems.push(itemWithStringId); 
+            }
+            window.renderLocalActionItems(); 
+        }
+
         async function handleDeleteMeeting(meetingId) { try { const batch = writeBatch(AppState.db); const items = await getDocs(query(collection(AppState.db, `${AppState.getSharedDataPath()}/actionItems`), where("meetingId", "==", meetingId))); items.forEach(doc => batch.delete(doc.ref)); batch.delete(doc(AppState.db, `${AppState.getSharedDataPath()}/meetings`, meetingId)); await batch.commit(); navigateTo('meetings'); } catch (err) { console.error("Error deleting meeting:", err); alert("Gagal menghapus meeting."); } }
         async function handleDeleteActionItem(itemId) { try { await deleteDoc(doc(AppState.db, `${AppState.getSharedDataPath()}/actionItems`, itemId)); } catch (err) { console.error("Error deleting item:", err); alert("Gagal menghapus item."); } }
 
