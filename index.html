@@ -120,11 +120,51 @@
             Object.values(AppState.chartInstances).forEach(chart => chart.destroy());
             AppState.chartInstances = {};
         }
+
+        const getChartThemeOptions = () => {
+            const isDarkMode = document.documentElement.classList.contains('dark');
+            const textColor = isDarkMode ? 'rgba(255, 255, 255, 0.7)' : 'rgba(0, 0, 0, 0.7)';
+            const gridColor = isDarkMode ? 'rgba(255, 255, 255, 0.1)' : 'rgba(0, 0, 0, 0.1)';
+
+            return {
+                plugins: {
+                    legend: {
+                        labels: { color: textColor }
+                    }
+                },
+                scales: {
+                    y: {
+                        beginAtZero: true,
+                        ticks: { color: textColor },
+                        grid: { color: gridColor }
+                    },
+                    x: {
+                        ticks: { color: textColor },
+                        grid: { color: gridColor }
+                    }
+                }
+            };
+        };
         
         function toggleTheme() {
             const html = document.documentElement;
             html.classList.toggle('dark');
             localStorage.theme = html.classList.contains('dark') ? 'dark' : 'light';
+            
+            // Update charts with new theme colors
+            const themeOptions = getChartThemeOptions();
+            Object.values(AppState.chartInstances).forEach(chart => {
+                chart.options.plugins.legend.labels.color = themeOptions.plugins.legend.labels.color;
+                if (chart.options.scales.x) {
+                    chart.options.scales.x.ticks.color = themeOptions.scales.x.ticks.color;
+                    chart.options.scales.x.grid.color = themeOptions.scales.x.grid.color;
+                }
+                if (chart.options.scales.y) {
+                    chart.options.scales.y.ticks.color = themeOptions.scales.y.ticks.color;
+                    chart.options.scales.y.grid.color = themeOptions.scales.y.grid.color;
+                }
+                chart.update();
+            });
         }
 
         // --- UI COMPONENT FUNCTIONS (TEMPLATE GENERATORS) ---
@@ -272,11 +312,15 @@
                 <div class="grid grid-cols-1 lg:grid-cols-3 gap-6 mb-8">
                     <div class="lg:col-span-1 p-6 bg-white dark:bg-gray-800 rounded-lg shadow-lg">
                         <h3 class="mb-4 text-xl font-bold text-gray-800 dark:text-white">Status Item Tindakan</h3>
-                        <canvas id="statusPieChart"></canvas>
+                        <div class="relative h-80">
+                            <canvas id="statusPieChart"></canvas>
+                        </div>
                     </div>
                     <div class="lg:col-span-2 p-6 bg-white dark:bg-gray-800 rounded-lg shadow-lg">
                         <h3 class="mb-4 text-xl font-bold text-gray-800 dark:text-white">Item Tindakan per Klinik</h3>
-                        <canvas id="itemsPerClinicChart"></canvas>
+                        <div class="relative h-80">
+                            <canvas id="itemsPerClinicChart"></canvas>
+                        </div>
                     </div>
                 </div>
                 <section>
@@ -301,7 +345,7 @@
                         backgroundColor: ['#FBBF24', '#3B82F6', '#10B981'],
                     }]
                 },
-                options: { responsive: true, maintainAspectRatio: false, plugins: { legend: { position: 'top' } } }
+                options: { responsive: true, maintainAspectRatio: false, ...getChartThemeOptions() }
             });
 
             const barCtx = document.getElementById('itemsPerClinicChart').getContext('2d');
@@ -315,7 +359,7 @@
                         backgroundColor: '#3B82F6',
                     }]
                 },
-                options: { responsive: true, maintainAspectRatio: false, plugins: { legend: { display: false } }, scales: { y: { beginAtZero: true } } }
+                options: { responsive: true, maintainAspectRatio: false, ...getChartThemeOptions() }
             });
         }
         
@@ -538,7 +582,9 @@
                                 </div>
                                 <div class="p-6 bg-white dark:bg-gray-800 rounded-lg shadow-lg">
                                     <h3 class="mb-4 text-xl font-bold text-gray-800 dark:text-white">Status Item</h3>
-                                    <canvas id="clinicStatusPieChart"></canvas>
+                                    <div class="relative h-64">
+                                        <canvas id="clinicStatusPieChart"></canvas>
+                                    </div>
                                 </div>
                             </div>
                             <section>
@@ -560,7 +606,7 @@
                                     labels: Object.keys(statusCounts),
                                     datasets: [{ data: Object.values(statusCounts), backgroundColor: ['#FBBF24', '#3B82F6', '#10B981'] }]
                                 },
-                                options: { responsive: true, maintainAspectRatio: false, plugins: { legend: { position: 'top' } } }
+                                options: { responsive: true, maintainAspectRatio: false, ...getChartThemeOptions() }
                             });
                         }
                     });
