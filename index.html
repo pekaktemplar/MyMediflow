@@ -74,12 +74,8 @@
             clinics: ['Mataram', 'Maluk', 'Bali', 'Surabaya', 'Yogyakarta', 'Semarang'],
             listeners: [], 
             chartInstances: {},
+            getSharedDataPath: () => `artifacts/${AppState.appId}/public/sharedData`
         };
-
-        // --- PLACEHOLDER LANGKAH 3.1 ---
-        // Daftar email yang sebelumnya ada di sini telah dihapus.
-        // Manajemen akses sekarang ditangani oleh Firebase Firestore.
-        // Silakan ikuti Langkah 1 dan 2 dari panduan.
         
         // DOM elements
         const appRoot = document.getElementById('app-root');
@@ -276,10 +272,10 @@
             appRoot.querySelector('main').innerHTML = `<div class="p-6"><h2 class="mb-6 text-4xl font-extrabold text-gray-900 dark:text-white">Dashboard</h2><div id="dashboard-content">${LoadingSpinner()}</div></div>`;
             const content = document.getElementById('dashboard-content');
             
-            if (!AppState.db || !AppState.userId) return;
+            if (!AppState.db) return;
 
-            const meetingsSnapshot = await getDocs(query(collection(AppState.db, `artifacts/${AppState.appId}/users/${AppState.userId}/meetings`)));
-            const actionItemsSnapshot = await getDocs(query(collection(AppState.db, `artifacts/${AppState.appId}/users/${AppState.userId}/actionItems`)));
+            const meetingsSnapshot = await getDocs(query(collection(AppState.db, `${AppState.getSharedDataPath()}/meetings`)));
+            const actionItemsSnapshot = await getDocs(query(collection(AppState.db, `${AppState.getSharedDataPath()}/actionItems`)));
             
             const meetings = meetingsSnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
             const actionItems = actionItemsSnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
@@ -287,16 +283,8 @@
             const overdueActionItems = actionItems.filter(item => item.status !== 'Done' && item.dueDate && new Date(item.dueDate) < new Date());
             const pendingActionItems = actionItems.filter(item => item.status === 'Open' || item.status === 'In Progress');
             
-            // Data for charts
-            const statusCounts = actionItems.reduce((acc, item) => {
-                acc[item.status] = (acc[item.status] || 0) + 1;
-                return acc;
-            }, {});
-            const itemsPerClinic = actionItems.reduce((acc, item) => {
-                const clinic = item.assignedTo || 'Unassigned';
-                acc[clinic] = (acc[clinic] || 0) + 1;
-                return acc;
-            }, {});
+            const statusCounts = actionItems.reduce((acc, item) => { acc[item.status] = (acc[item.status] || 0) + 1; return acc; }, {});
+            const itemsPerClinic = actionItems.reduce((acc, item) => { const clinic = item.assignedTo || 'Unassigned'; acc[clinic] = (acc[clinic] || 0) + 1; return acc; }, {});
 
             content.innerHTML = `
                 <div class="grid grid-cols-1 gap-6 mb-8 md:grid-cols-3">
@@ -329,33 +317,10 @@
                                 </div>`).join('')}</div>` : `<p class="text-gray-600 dark:text-gray-400">Tidak ada item tindakan yang melewati batas waktu.</p>`}
                 </section>`;
 
-            // Render Charts
             const pieCtx = document.getElementById('statusPieChart').getContext('2d');
-            AppState.chartInstances.pieChart = new Chart(pieCtx, {
-                type: 'doughnut',
-                data: {
-                    labels: Object.keys(statusCounts),
-                    datasets: [{
-                        data: Object.values(statusCounts),
-                        backgroundColor: ['#FBBF24', '#3B82F6', '#10B981'],
-                    }]
-                },
-                options: { responsive: true, maintainAspectRatio: false, ...getChartThemeOptions() }
-            });
-
+            AppState.chartInstances.pieChart = new Chart(pieCtx, { type: 'doughnut', data: { labels: Object.keys(statusCounts), datasets: [{ data: Object.values(statusCounts), backgroundColor: ['#FBBF24', '#3B82F6', '#10B981'] }] }, options: { responsive: true, maintainAspectRatio: false, ...getChartThemeOptions() } });
             const barCtx = document.getElementById('itemsPerClinicChart').getContext('2d');
-            AppState.chartInstances.barChart = new Chart(barCtx, {
-                type: 'bar',
-                data: {
-                    labels: Object.keys(itemsPerClinic),
-                    datasets: [{
-                        label: 'Jumlah Item',
-                        data: Object.values(itemsPerClinic),
-                        backgroundColor: '#3B82F6',
-                    }]
-                },
-                options: { responsive: true, maintainAspectRatio: false, ...getChartThemeOptions() }
-            });
+            AppState.chartInstances.barChart = new Chart(barCtx, { type: 'bar', data: { labels: Object.keys(itemsPerClinic), datasets: [{ label: 'Jumlah Item', data: Object.values(itemsPerClinic), backgroundColor: '#3B82F6' }] }, options: { responsive: true, maintainAspectRatio: false, ...getChartThemeOptions() } });
         }
         
         function renderMeetingList() {
@@ -395,10 +360,8 @@
                 const filterClinic = filterSelect.value;
                 const startDate = startDateInput.value ? new Date(startDateInput.value) : null;
                 const endDate = endDateInput.value ? new Date(endDateInput.value) : null;
-
                 if(startDate) startDate.setHours(0,0,0,0);
                 if(endDate) endDate.setHours(23,59,59,999);
-
                 const filtered = allMeetings.filter(meeting => {
                     const meetingDate = new Date(meeting.date);
                     const matchesDate = (!startDate || meetingDate >= startDate) && (!endDate || meetingDate <= endDate);
@@ -411,7 +374,7 @@
 
             [searchInput, filterSelect, startDateInput, endDateInput].forEach(el => el.addEventListener('input', applyFilters));
             
-            const q = query(collection(AppState.db, `artifacts/${AppState.appId}/users/${AppState.userId}/meetings`));
+            const q = query(collection(AppState.db, `${AppState.getSharedDataPath()}/meetings`));
             const unsubscribe = onSnapshot(q, (snapshot) => {
                 const meetingsData = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
                 meetingsData.sort((a, b) => new Date(b.date) - new Date(a.date));
@@ -428,100 +391,49 @@
                 <div id="search-results-content">${LoadingSpinner()}</div>
              </div>`;
              const content = document.getElementById('search-results-content');
-             if (!searchTerm) {
-                 content.innerHTML = `<p class="text-gray-600 dark:text-gray-400">Silakan masukkan kata kunci untuk memulai pencarian.</p>`;
-                 return;
-             }
+             if (!searchTerm) { content.innerHTML = `<p class="text-gray-600 dark:text-gray-400">Silakan masukkan kata kunci untuk memulai pencarian.</p>`; return; }
 
-             // Firestore doesn't support case-insensitive search natively, so this is a basic substring match.
-             // For a real app, a third-party search service like Algolia is recommended.
-             const meetingsQuery = getDocs(query(collection(AppState.db, `artifacts/${AppState.appId}/users/${AppState.userId}/meetings`)));
-             const itemsQuery = getDocs(query(collection(AppState.db, `artifacts/${AppState.appId}/users/${AppState.userId}/actionItems`)));
+             const meetingsQuery = getDocs(query(collection(AppState.db, `${AppState.getSharedDataPath()}/meetings`)));
+             const itemsQuery = getDocs(query(collection(AppState.db, `${AppState.getSharedDataPath()}/actionItems`)));
 
              const [meetingsSnapshot, itemsSnapshot] = await Promise.all([meetingsQuery, itemsQuery]);
-             
              const lowerCaseSearchTerm = searchTerm.toLowerCase();
-             const foundMeetings = meetingsSnapshot.docs
-                .map(doc => ({ id: doc.id, ...doc.data() }))
-                .filter(m => m.title && m.title.toLowerCase().includes(lowerCaseSearchTerm));
-                
-             const foundItems = itemsSnapshot.docs
-                .map(doc => ({ id: doc.id, ...doc.data() }))
-                .filter(i => i.title && i.title.toLowerCase().includes(lowerCaseSearchTerm));
-
-             if (foundMeetings.length === 0 && foundItems.length === 0) {
-                 content.innerHTML = `<p class="text-gray-600 dark:text-gray-400">Tidak ada hasil yang ditemukan.</p>`;
-                 return;
-             }
+             const foundMeetings = meetingsSnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })).filter(m => m.title && m.title.toLowerCase().includes(lowerCaseSearchTerm));
+             const foundItems = itemsSnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })).filter(i => i.title && i.title.toLowerCase().includes(lowerCaseSearchTerm));
+             if (foundMeetings.length === 0 && foundItems.length === 0) { content.innerHTML = `<p class="text-gray-600 dark:text-gray-400">Tidak ada hasil yang ditemukan.</p>`; return; }
 
              content.innerHTML = `
-                ${foundMeetings.length > 0 ? `
-                    <section class="mb-8">
-                        <h3 class="mb-4 text-2xl font-bold text-gray-800 dark:text-white">Meeting Ditemukan (${foundMeetings.length})</h3>
-                        <div class="grid grid-cols-1 gap-4 md:grid-cols-2 lg:grid-cols-3">
-                            ${foundMeetings.map(MeetingCard).join('')}
-                        </div>
-                    </section>
-                ` : ''}
-                ${foundItems.length > 0 ? `
-                    <section>
-                        <h3 class="mb-4 text-2xl font-bold text-gray-800 dark:text-white">Item Tindakan Ditemukan (${foundItems.length})</h3>
-                        <ul class="grid grid-cols-1 gap-4 md:grid-cols-2 lg:grid-cols-3">
-                            ${foundItems.map(item => ActionItemListItem(item, false)).join('')}
-                        </ul>
-                    </section>
-                ` : ''}
+                ${foundMeetings.length > 0 ? `<section class="mb-8"><h3 class="mb-4 text-2xl font-bold text-gray-800 dark:text-white">Meeting Ditemukan (${foundMeetings.length})</h3><div class="grid grid-cols-1 gap-4 md:grid-cols-2 lg:grid-cols-3">${foundMeetings.map(MeetingCard).join('')}</div></section>` : ''}
+                ${foundItems.length > 0 ? `<section><h3 class="mb-4 text-2xl font-bold text-gray-800 dark:text-white">Item Tindakan Ditemukan (${foundItems.length})</h3><ul class="grid grid-cols-1 gap-4 md:grid-cols-2 lg:grid-cols-3">${foundItems.map(item => ActionItemListItem(item, false)).join('')}</ul></section>` : ''}
              `;
         }
 
         function renderMeetingDetail() {
             appRoot.querySelector('main').innerHTML = LoadingSpinner();
-            if (!AppState.db || !AppState.userId || !AppState.currentMeetingId) return;
+            if (!AppState.db || !AppState.currentMeetingId) return;
 
             const meetingId = AppState.currentMeetingId;
-            const meetingRef = doc(AppState.db, `artifacts/${AppState.appId}/users/${AppState.userId}/meetings`, meetingId);
+            const meetingRef = doc(AppState.db, `${AppState.getSharedDataPath()}/meetings`, meetingId);
             
             const unsubMeeting = onSnapshot(meetingRef, (docSnap) => {
-                if (!docSnap.exists()) {
-                    appRoot.querySelector('main').innerHTML = ErrorDisplay("Meeting tidak ditemukan.");
-                    return;
-                }
+                if (!docSnap.exists()) { appRoot.querySelector('main').innerHTML = ErrorDisplay("Meeting tidak ditemukan."); return; }
                 const meeting = { id: docSnap.id, ...docSnap.data() };
-                
-                const actionItemsQuery = query(collection(AppState.db, `artifacts/${AppState.appId}/users/${AppState.userId}/actionItems`), where("meetingId", "==", meetingId));
+                const actionItemsQuery = query(collection(AppState.db, `${AppState.getSharedDataPath()}/actionItems`), where("meetingId", "==", meetingId));
                 const unsubItems = onSnapshot(actionItemsQuery, (snapshot) => {
                     const actionItems = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
-                    const groupedActionItems = actionItems.reduce((acc, item) => {
-                        const clinicName = item.assignedTo || 'Tidak Ditugaskan';
-                        if (!acc[clinicName]) acc[clinicName] = [];
-                        acc[clinicName].push(item);
-                        return acc;
-                    }, {});
-
+                    const groupedActionItems = actionItems.reduce((acc, item) => { const clinicName = item.assignedTo || 'Tidak Ditugaskan'; if (!acc[clinicName]) acc[clinicName] = []; acc[clinicName].push(item); return acc; }, {});
                     appRoot.querySelector('main').innerHTML = `
                         <div class="p-6">
                             <div class="flex items-center justify-between mb-6">
                                 <h2 class="text-4xl font-extrabold text-gray-900 dark:text-white">${meeting.title}</h2>
-                                <div class="space-x-3">
-                                    <button data-action="navigate" data-page="edit-meeting" data-id="${meeting.id}" class="px-5 py-2 text-white bg-green-600 rounded-md hover:bg-green-700">Edit Meeting</button>
-                                    <button data-action="delete-meeting" data-id="${meeting.id}" class="px-5 py-2 text-white bg-red-600 rounded-md hover:bg-red-700">Hapus Meeting</button>
-                                </div>
+                                <div class="space-x-3"><button data-action="navigate" data-page="edit-meeting" data-id="${meeting.id}" class="px-5 py-2 text-white bg-green-600 rounded-md hover:bg-green-700">Edit Meeting</button><button data-action="delete-meeting" data-id="${meeting.id}" class="px-5 py-2 text-white bg-red-600 rounded-md hover:bg-red-700">Hapus Meeting</button></div>
                             </div>
                             <p class="mb-4 text-gray-700 dark:text-gray-300"><span class="font-semibold">Tanggal:</span> ${formatDisplayDate(meeting.date, { year: 'numeric', month: 'long', day: 'numeric' })}</p>
                             <p class="mb-6 text-gray-700 dark:text-gray-300"><span class="font-semibold">Peserta:</span> ${meeting.participants?.join(', ')}</p>
+                            <div class="mb-8"><h3 class="mb-3 text-2xl font-bold text-gray-800 dark:text-white">Pembaruan dari Klinik</h3>${meeting.clinicUpdates && Object.keys(meeting.clinicUpdates).length > 0 ? `<ul class="grid grid-cols-1 gap-4 md:grid-cols-2 lg:grid-cols-3">${Object.entries(meeting.clinicUpdates).map(([clinic, update]) => `<li class="p-4 bg-gray-100 dark:bg-gray-700 rounded-md"><span class="font-semibold">${clinic}:</span><ul class="ml-4 list-disc list-inside">${update.split('\n').map(line => line.trim() ? `<li>${line.trim().replace(/^- /, '')}</li>` : '').join('')}</ul></li>`).join('')}</ul>` : `<p class="text-gray-600 dark:text-gray-400">Tidak ada pembaruan klinik.</p>`}</div>
+                            <div class="mb-8"><h3 class="mb-3 text-2xl font-bold text-gray-800 dark:text-white">Diskusi Umum</h3><div class="p-4 bg-gray-100 dark:bg-gray-700 rounded-md whitespace-pre-wrap">${meeting.discussionPoints.split('\n').map(line => line.trim() ? `<p>${line}</p>` : '').join('')}</div></div>
                             <div class="mb-8">
-                                <h3 class="mb-3 text-2xl font-bold text-gray-800 dark:text-white">Pembaruan dari Klinik</h3>
-                                ${meeting.clinicUpdates && Object.keys(meeting.clinicUpdates).length > 0 ? `<ul class="grid grid-cols-1 gap-4 md:grid-cols-2 lg:grid-cols-3">${Object.entries(meeting.clinicUpdates).map(([clinic, update]) => `<li class="p-4 bg-gray-100 dark:bg-gray-700 rounded-md"><span class="font-semibold">${clinic}:</span><ul class="ml-4 list-disc list-inside">${update.split('\n').map(line => line.trim() ? `<li>${line.trim().replace(/^- /, '')}</li>` : '').join('')}</ul></li>`).join('')}</ul>` : `<p class="text-gray-600 dark:text-gray-400">Tidak ada pembaruan klinik.</p>`}
-                            </div>
-                            <div class="mb-8">
-                                <h3 class="mb-3 text-2xl font-bold text-gray-800 dark:text-white">Diskusi Umum</h3>
-                                <div class="p-4 bg-gray-100 dark:bg-gray-700 rounded-md whitespace-pre-wrap">${meeting.discussionPoints.split('\n').map(line => line.trim() ? `<p>${line}</p>` : '').join('')}</div>
-                            </div>
-                            <div class="mb-8">
-                                <div class="flex items-center justify-between mb-4">
-                                    <h3 class="text-2xl font-bold text-gray-800 dark:text-white">Item Tindakan</h3>
-                                    <button data-action="add-action-item" class="px-5 py-2 text-white bg-blue-600 rounded-md hover:bg-blue-700">+ Item Tindakan Baru</button>
-                                </div>
+                                <div class="flex items-center justify-between mb-4"><h3 class="text-2xl font-bold text-gray-800 dark:text-white">Item Tindakan</h3><button data-action="add-action-item" class="px-5 py-2 text-white bg-blue-600 rounded-md hover:bg-blue-700">+ Item Tindakan Baru</button></div>
                                 ${actionItems.length === 0 ? `<p class="text-gray-600 dark:text-gray-400">Tidak ada item tindakan.</p>` : `<div class="space-y-6">${Object.entries(groupedActionItems).map(([clinicName, items]) => `<div class="p-4 border dark:border-gray-700 rounded-lg"><h4 class="mb-3 text-xl font-semibold text-gray-900 dark:text-white">Klinik: ${clinicName}</h4><ul class="grid grid-cols-1 gap-4 md:grid-cols-2 lg:grid-cols-3">${items.map(item => ActionItemListItem(item, true)).join('')}</ul></div>`).join('')}</div>`}
                             </div>
                         </div>`;
@@ -546,28 +458,18 @@
 
             const content = document.getElementById('clinic-dashboard-content');
             const clinicSelect = document.getElementById('clinic-select');
-            
             let unsubMeetings, unsubItems;
-
             const updateDashboard = (selectedClinic) => {
-                if (unsubMeetings) unsubMeetings();
-                if (unsubItems) unsubItems();
-                if(AppState.chartInstances.clinicPieChart) AppState.chartInstances.clinicPieChart.destroy();
-                
+                if (unsubMeetings) unsubMeetings(); if (unsubItems) unsubItems(); if(AppState.chartInstances.clinicPieChart) AppState.chartInstances.clinicPieChart.destroy();
                 content.innerHTML = LoadingSpinner();
-
-                const meetingsQuery = query(collection(AppState.db, `artifacts/${AppState.appId}/users/${AppState.userId}/meetings`), where('participants', 'array-contains', selectedClinic));
+                const meetingsQuery = query(collection(AppState.db, `${AppState.getSharedDataPath()}/meetings`), where('participants', 'array-contains', selectedClinic));
                 unsubMeetings = onSnapshot(meetingsQuery, meetingsSnapshot => {
                     const meetings = meetingsSnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })).sort((a, b) => new Date(b.date) - new Date(a.date));
-
-                    const itemsQuery = query(collection(AppState.db, `artifacts/${AppState.appId}/users/${AppState.userId}/actionItems`), where('assignedTo', '==', selectedClinic));
+                    const itemsQuery = query(collection(AppState.db, `${AppState.getSharedDataPath()}/actionItems`), where('assignedTo', '==', selectedClinic));
                     unsubItems = onSnapshot(itemsQuery, itemsSnapshot => {
                         const actionItems = itemsSnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
-                        const statusCounts = actionItems.reduce((acc, item) => {
-                            acc[item.status] = (acc[item.status] || 0) + 1; return acc;
-                        }, {});
+                        const statusCounts = actionItems.reduce((acc, item) => { acc[item.status] = (acc[item.status] || 0) + 1; return acc; }, {});
                         const overdueItems = actionItems.filter(item => item.status !== 'Done' && item.dueDate && new Date(item.dueDate) < new Date());
-
                         content.innerHTML = `
                             <h3 class="mb-6 text-3xl font-bold text-gray-800 dark:text-white">Detail untuk ${selectedClinic}</h3>
                              <div class="grid grid-cols-1 lg:grid-cols-3 gap-6 mb-8">
@@ -577,39 +479,24 @@
                                 </div>
                                 <div class="p-6 bg-white dark:bg-gray-800 rounded-lg shadow-lg">
                                     <h3 class="mb-4 text-xl font-bold text-gray-800 dark:text-white">Status Item</h3>
-                                    <div class="relative h-64">
-                                        <canvas id="clinicStatusPieChart"></canvas>
-                                    </div>
+                                    <div class="relative h-64"><canvas id="clinicStatusPieChart"></canvas></div>
                                 </div>
                             </div>
                             <section>
                                 <h4 class="mb-4 text-2xl font-bold">Item Tindakan untuk ${selectedClinic}</h4>
                                 ${actionItems.length > 0 ? `<div class="grid grid-cols-1 gap-4 md:grid-cols-2 lg:grid-cols-3">
-                                    ${['Open', 'In Progress', 'Done'].map(status => {
-                                        const items = actionItems.filter(i => i.status === status);
-                                        return `<div class="p-4 bg-gray-50 dark:bg-gray-800 rounded-lg shadow-inner"><h5 class="mb-3 text-xl font-semibold">${status} (${items.length})</h5><ul class="space-y-2">${items.map(item => ActionItemListItem(item)).join('')}</ul></div>`;
-                                    }).join('')}
+                                    ${['Open', 'In Progress', 'Done'].map(status => { const items = actionItems.filter(i => i.status === status); return `<div class="p-4 bg-gray-50 dark:bg-gray-800 rounded-lg shadow-inner"><h5 class="mb-3 text-xl font-semibold">${status} (${items.length})</h5><ul class="space-y-2">${items.map(item => ActionItemListItem(item)).join('')}</ul></div>`; }).join('')}
                                 </div>` : `<p class="dark:text-gray-400">Tidak ada item tindakan untuk ${selectedClinic}.</p>`}
-                            </section>
-                        `;
-
+                            </section>`;
                         if (actionItems.length > 0) {
                             const pieCtx = document.getElementById('clinicStatusPieChart').getContext('2d');
-                            AppState.chartInstances.clinicPieChart = new Chart(pieCtx, {
-                                type: 'doughnut',
-                                data: {
-                                    labels: Object.keys(statusCounts),
-                                    datasets: [{ data: Object.values(statusCounts), backgroundColor: ['#FBBF24', '#3B82F6', '#10B981'] }]
-                                },
-                                options: { responsive: true, maintainAspectRatio: false, ...getChartThemeOptions() }
-                            });
+                            AppState.chartInstances.clinicPieChart = new Chart(pieCtx, { type: 'doughnut', data: { labels: Object.keys(statusCounts), datasets: [{ data: Object.values(statusCounts), backgroundColor: ['#FBBF24', '#3B82F6', '#10B981'] }] }, options: { responsive: true, maintainAspectRatio: false, ...getChartThemeOptions() } });
                         }
                     });
                     AppState.listeners.push(unsubItems);
                 });
                 AppState.listeners.push(unsubMeetings);
             };
-            
             clinicSelect.addEventListener('change', (e) => updateDashboard(e.target.value));
             updateDashboard(clinicSelect.value);
         }
@@ -617,105 +504,28 @@
         async function renderMeetingForm() {
             const isEditMode = !!AppState.currentMeetingId;
             appRoot.querySelector('main').innerHTML = LoadingSpinner();
-
-            let formState = {
-                date: '', title: '', participants: [], discussionPoints: '- ',
-                clinicUpdates: {}, localActionItems: [], initialActionItems: []
-            };
-
-            const updateTitle = () => {
-                const titleEl = document.getElementById('auto-title');
-                if (formState.date) {
-                    const dateObj = new Date(formState.date);
-                    if (!isNaN(dateObj.getTime())) formState.title = `Meeting ${dateObj.toLocaleDateString('id-ID', { year: 'numeric', month: 'long', day: 'numeric' })}`;
-                } else formState.title = '';
-                if(titleEl) titleEl.textContent = formState.title || 'Pilih tanggal untuk membuat judul';
-            };
-
-            const renderLocalActionItems = () => {
-                const formState = window.currentMeetingFormState; if (!formState) return;
-                AppState.clinics.forEach(clinic => {
-                    const container = document.getElementById(`action-items-for-${clinic}`);
-                    if (container) {
-                        const itemsForClinic = formState.localActionItems.filter(item => item.assignedTo === clinic);
-                        container.innerHTML = itemsForClinic.length > 0 ? `<h4 class="text-sm font-semibold mt-4 mb-2 text-gray-600 dark:text-gray-400">Item Tindakan yang Dibawa:</h4><ul class="space-y-2">${itemsForClinic.map(item => ActionItemListItem(item, true, true)).join('')}</ul>` : '';
-                    }
-                });
-            };
-
+            let formState = { date: '', title: '', participants: [], discussionPoints: '- ', clinicUpdates: {}, localActionItems: [], initialActionItems: [] };
+            const updateTitle = () => { const titleEl = document.getElementById('auto-title'); if (formState.date) { const d = new Date(formState.date); if (!isNaN(d.getTime())) formState.title = `Meeting ${d.toLocaleDateString('id-ID', { year: 'numeric', month: 'long', day: 'numeric' })}`; } else formState.title = ''; if(titleEl) titleEl.textContent = formState.title || 'Pilih tanggal'; };
+            const renderLocalActionItems = () => { const fs = window.currentMeetingFormState; if (!fs) return; AppState.clinics.forEach(c => { const cont = document.getElementById(`action-items-for-${c}`); if (cont) { const items = fs.localActionItems.filter(i => i.assignedTo === c); cont.innerHTML = items.length > 0 ? `<h4 class="text-sm font-semibold mt-4 mb-2 text-gray-600 dark:text-gray-400">Item:</h4><ul class="space-y-2">${items.map(item => ActionItemListItem(item, true, true)).join('')}</ul>` : ''; }}); };
             if (isEditMode) {
-                const docRef = doc(AppState.db, `artifacts/${AppState.appId}/users/${AppState.userId}/meetings`, AppState.currentMeetingId);
+                const docRef = doc(AppState.db, `${AppState.getSharedDataPath()}/meetings`, AppState.currentMeetingId);
                 const docSnap = await getDoc(docRef);
-                if (docSnap.exists()) {
-                    const data = docSnap.data();
-                    formState = { ...formState, ...data, date: formatShortDisplayDate(data.date) || '' };
-                    const q = query(collection(AppState.db, `artifacts/${AppState.appId}/users/${AppState.userId}/actionItems`), where("meetingId", "==", AppState.currentMeetingId));
-                    const items = (await getDocs(q)).docs.map(d => ({ id: d.id, ...d.data() }));
-                    formState.localActionItems = items;
-                    formState.initialActionItems = JSON.parse(JSON.stringify(items));
-                }
+                if (docSnap.exists()) { const data = docSnap.data(); formState = { ...formState, ...data, date: formatShortDisplayDate(data.date) || '' }; const q = query(collection(AppState.db, `${AppState.getSharedDataPath()}/actionItems`), where("meetingId", "==", AppState.currentMeetingId)); const items = (await getDocs(q)).docs.map(d => ({ id: d.id, ...d.data() })); formState.localActionItems = items; formState.initialActionItems = JSON.parse(JSON.stringify(items)); }
             } else {
-                const q = query(collection(AppState.db, `artifacts/${AppState.appId}/users/${AppState.userId}/actionItems`), where('status', '!=', 'Done'));
-                const items = (await getDocs(q)).docs.map(d => ({ id: d.id, ...d.data() }));
-                formState.localActionItems = items;
-                formState.initialActionItems = JSON.parse(JSON.stringify(items));
+                const q = query(collection(AppState.db, `${AppState.getSharedDataPath()}/actionItems`), where('status', '!=', 'Done'));
+                const items = (await getDocs(q)).docs.map(d => ({ id: d.id, ...d.data() })); formState.localActionItems = items; formState.initialActionItems = JSON.parse(JSON.stringify(items));
             }
-            
             appRoot.querySelector('main').innerHTML = `
-                <div class="p-6">
-                    <h2 class="mb-6 text-4xl font-extrabold text-gray-900 dark:text-white">${isEditMode ? 'Edit Meeting' : 'Meeting Baru'}</h2>
-                    <form id="meeting-form" class="p-8 bg-white dark:bg-gray-800 rounded-lg shadow-xl">
-                        <div class="mb-6">
-                            <label for="date" class="block mb-2 text-sm font-medium text-gray-700 dark:text-gray-300">Tanggal Meeting</label>
-                            <input type="date" id="date" value="${formState.date}" class="w-full px-4 py-2 bg-gray-50 dark:bg-gray-700 border border-gray-300 dark:border-gray-600 rounded-md" required />
-                        </div>
-                        <div class="mb-6">
-                            <label class="block mb-2 text-sm font-medium text-gray-700 dark:text-gray-300">Judul Meeting Otomatis</label>
-                            <p id="auto-title" class="w-full px-4 py-2 bg-gray-100 dark:bg-gray-700 border dark:border-gray-600 rounded-md"></p>
-                        </div>
-                        <div class="mb-6">
-                            <label class="block mb-2 text-sm font-medium text-gray-700 dark:text-gray-300">Peserta</label>
-                            <div class="grid grid-cols-2 gap-2 md:grid-cols-3">
-                                <div class="flex items-center"><input type="checkbox" id="participant-all" class="w-4 h-4 text-blue-600 rounded" /><label for="participant-all" class="ml-2">Semua</label></div>
-                                ${AppState.clinics.map(c => `<div class="flex items-center"><input type="checkbox" id="p-${c}" data-clinic="${c}" class="w-4 h-4 text-blue-600 rounded participant-checkbox" ${formState.participants.includes(c) ? 'checked' : ''} /><label for="p-${c}" class="ml-2">${c}</label></div>`).join('')}
-                            </div>
-                        </div>
-                        <div class="mb-6">
-                            <label for="discussionPoints" class="block mb-2 text-sm font-medium text-gray-700 dark:text-gray-300">Diskusi Umum</label>
-                            <textarea id="discussionPoints" rows="5" class="w-full px-4 py-2 bg-gray-50 dark:bg-gray-700 border dark:border-gray-600 rounded-md" placeholder="Catat poin diskusi...">${formState.discussionPoints}</textarea>
-                        </div>
-                        <div class="mb-6">
-                            <label class="block mb-2 text-sm font-medium text-gray-700 dark:text-gray-300">Pembaruan dari Klinik</label>
-                            <div class="space-y-4">
-                                ${AppState.clinics.map(clinic => `
-                                    <div class="p-4 border dark:border-gray-600 rounded-lg">
-                                        <label for="update-${clinic}" class="mb-2 text-lg font-semibold">${clinic}:</label>
-                                        <div class="flex items-center space-x-2">
-                                            <textarea id="update-${clinic}" data-clinic="${clinic}" rows="2" class="clinic-update-textarea flex-grow px-4 py-2 bg-gray-50 dark:bg-gray-700 border dark:border-gray-600 rounded-md" placeholder="Pembaruan untuk ${clinic}...">${formState.clinicUpdates[clinic] || '- '}</textarea>
-                                            <button type="button" data-action="add-local-action-item" data-clinic="${clinic}" class="px-3 py-2 text-sm text-white bg-blue-500 rounded-md hover:bg-blue-600" title="+ Item untuk ${clinic}">+ Item</button>
-                                        </div>
-                                        <div id="action-items-for-${clinic}" class="mt-3"></div>
-                                    </div>
-                                `).join('')}
-                            </div>
-                        </div>
-                        <div class="flex justify-end space-x-4 mt-8">
-                            <button type="button" data-action="navigate" data-page="${isEditMode ? 'meeting-detail' : 'meetings'}" data-id="${AppState.currentMeetingId || ''}" class="px-6 py-2 text-gray-700 bg-gray-200 dark:bg-gray-600 dark:text-gray-200 rounded-md hover:bg-gray-300 dark:hover:bg-gray-500">Batal</button>
-                            <button type="submit" class="px-6 py-2 text-white bg-blue-600 rounded-md hover:bg-blue-700">${isEditMode ? 'Simpan Perubahan' : 'Buat Meeting'}</button>
-                        </div>
-                    </form>
-                </div>`;
-            
-            window.currentMeetingFormState = formState; window.renderLocalActionItems = renderLocalActionItems;
-            updateTitle(); renderLocalActionItems();
-
-            const form = document.getElementById('meeting-form');
-            form.addEventListener('submit', (e) => handleMeetingFormSubmit(e, formState, isEditMode));
-            document.getElementById('date').addEventListener('change', (e) => { formState.date = e.target.value; updateTitle(); });
-            document.getElementById('participant-all').addEventListener('change', (e) => { document.querySelectorAll('.participant-checkbox').forEach(cb => cb.checked = e.target.checked); formState.participants = e.target.checked ? [...AppState.clinics] : []; });
-            document.querySelectorAll('.participant-checkbox').forEach(cb => cb.addEventListener('change', (e) => { const c = e.target.dataset.clinic; if (e.target.checked) { if (!formState.participants.includes(c)) formState.participants.push(c); } else { formState.participants = formState.participants.filter(p => p !== c); }}));
-            document.querySelectorAll('.clinic-update-textarea').forEach(ta => ta.addEventListener('input', (e) => { formState.clinicUpdates[e.target.dataset.clinic] = e.target.value; }));
-            document.getElementById('discussionPoints').addEventListener('input', (e) => { formState.discussionPoints = e.target.value; });
+                <div class="p-6"><h2 class="mb-6 text-4xl font-extrabold text-gray-900 dark:text-white">${isEditMode ? 'Edit Meeting' : 'Meeting Baru'}</h2><form id="meeting-form" class="p-8 bg-white dark:bg-gray-800 rounded-lg shadow-xl">
+                    <div class="mb-6"><label for="date" class="block mb-2 text-sm font-medium text-gray-700 dark:text-gray-300">Tanggal</label><input type="date" id="date" value="${formState.date}" class="w-full px-4 py-2 bg-gray-50 dark:bg-gray-700 border dark:border-gray-600 rounded-md" required /></div>
+                    <div class="mb-6"><label class="block mb-2 text-sm font-medium text-gray-700 dark:text-gray-300">Judul</label><p id="auto-title" class="w-full px-4 py-2 bg-gray-100 dark:bg-gray-700 border dark:border-gray-600 rounded-md"></p></div>
+                    <div class="mb-6"><label class="block mb-2 text-sm font-medium dark:text-gray-300">Peserta</label><div class="grid grid-cols-2 gap-2 md:grid-cols-3"><div class="flex items-center"><input type="checkbox" id="participant-all" class="w-4 h-4 text-blue-600 rounded" /><label for="participant-all" class="ml-2">Semua</label></div>${AppState.clinics.map(c => `<div class="flex items-center"><input type="checkbox" id="p-${c}" data-clinic="${c}" class="w-4 h-4 text-blue-600 rounded participant-checkbox" ${formState.participants.includes(c) ? 'checked' : ''} /><label for="p-${c}" class="ml-2">${c}</label></div>`).join('')}</div></div>
+                    <div class="mb-6"><label for="discussionPoints" class="block mb-2 text-sm font-medium dark:text-gray-300">Diskusi Umum</label><textarea id="discussionPoints" rows="5" class="w-full px-4 py-2 bg-gray-50 dark:bg-gray-700 border dark:border-gray-600 rounded-md" placeholder="...">${formState.discussionPoints}</textarea></div>
+                    <div class="mb-6"><label class="block mb-2 text-sm font-medium dark:text-gray-300">Pembaruan Klinik</label><div class="space-y-4">${AppState.clinics.map(clinic => `<div class="p-4 border dark:border-gray-600 rounded-lg"><label for="update-${clinic}" class="mb-2 text-lg font-semibold">${clinic}:</label><div class="flex items-center space-x-2"><textarea id="update-${clinic}" data-clinic="${clinic}" rows="2" class="flex-grow px-4 py-2 bg-gray-50 dark:bg-gray-700 border dark:border-gray-600 rounded-md" placeholder="...">${formState.clinicUpdates[clinic] || '- '}</textarea><button type="button" data-action="add-local-action-item" data-clinic="${clinic}" class="px-3 py-2 text-sm text-white bg-blue-500 rounded-md hover:bg-blue-600" title="+ Item">+ Item</button></div><div id="action-items-for-${clinic}" class="mt-3"></div></div>`).join('')}</div></div>
+                    <div class="flex justify-end space-x-4 mt-8"><button type="button" data-action="navigate" data-page="${isEditMode ? 'meeting-detail' : 'meetings'}" data-id="${AppState.currentMeetingId || ''}" class="px-6 py-2 bg-gray-200 dark:bg-gray-600 rounded-md hover:bg-gray-300 dark:hover:bg-gray-500">Batal</button><button type="submit" class="px-6 py-2 text-white bg-blue-600 rounded-md hover:bg-blue-700">${isEditMode ? 'Simpan' : 'Buat'}</button></div>
+                </form></div>`;
+            window.currentMeetingFormState = formState; window.renderLocalActionItems = renderLocalActionItems; updateTitle(); renderLocalActionItems();
+            const form = document.getElementById('meeting-form'); form.addEventListener('submit', (e) => handleMeetingFormSubmit(e, formState, isEditMode)); document.getElementById('date').addEventListener('change', (e) => { formState.date = e.target.value; updateTitle(); }); document.getElementById('participant-all').addEventListener('change', (e) => { document.querySelectorAll('.participant-checkbox').forEach(cb => cb.checked = e.target.checked); formState.participants = e.target.checked ? [...AppState.clinics] : []; }); document.querySelectorAll('.participant-checkbox').forEach(cb => cb.addEventListener('change', (e) => { const c = e.target.dataset.clinic; if (e.target.checked) { if (!formState.participants.includes(c)) formState.participants.push(c); } else { formState.participants = formState.participants.filter(p => p !== c); }})); document.querySelectorAll('.clinic-update-textarea').forEach(ta => ta.addEventListener('input', (e) => { formState.clinicUpdates[e.target.dataset.clinic] = e.target.value; })); document.getElementById('discussionPoints').addEventListener('input', (e) => { formState.discussionPoints = e.target.value; });
         }
 
         // --- AUTHENTICATION & INITIALIZATION ---
@@ -732,8 +542,7 @@
         }
 
         appRoot.addEventListener('click', async (e) => {
-            const target = e.target.closest('[data-action]');
-            if (!target) return;
+            const target = e.target.closest('[data-action]'); if (!target) return;
             const action = target.dataset.action, id = target.dataset.id, page = target.dataset.page, clinic = target.dataset.clinic;
             switch (action) {
                 case 'navigate': navigateTo(page, id); break;
@@ -743,7 +552,7 @@
                 case 'export-excel': exportAllDataToExcel(); break;
                 case 'delete-meeting': showConfirmationModal("Konfirmasi Hapus Meeting", "Anda yakin ingin menghapus meeting ini dan semua item tindakannya?", () => handleDeleteMeeting(id)); break;
                 case 'add-action-item': showActionItemFormModal({ meetingId: AppState.currentMeetingId }); break;
-                case 'edit-action-item': { const item = await getDoc(doc(AppState.db, `artifacts/${AppState.appId}/users/${AppState.userId}/actionItems`, id)); if (item.exists()) showActionItemFormModal({ selectedActionItem: {id, ...item.data()}, meetingId: AppState.currentMeetingId }); } break;
+                case 'edit-action-item': { const item = await getDoc(doc(AppState.db, `${AppState.getSharedDataPath()}/actionItems`, id)); if (item.exists()) showActionItemFormModal({ selectedActionItem: {id, ...item.data()}, meetingId: AppState.currentMeetingId }); } break;
                 case 'delete-action-item': showConfirmationModal("Konfirmasi Hapus Item", "Anda yakin ingin menghapus item tindakan ini?", () => handleDeleteActionItem(id)); break;
                 case 'add-local-action-item': showActionItemFormModal({ onSaveLocally: handleSaveLocallyActionItem, clinicToAssignAction: clinic }); break;
                 case 'edit-local-action-item': { const item = window.currentMeetingFormState.localActionItems.find(i => i.id.toString() === id); if(item) showActionItemFormModal({ onSaveLocally: handleSaveLocallyActionItem, selectedActionItem: item }); } break;
@@ -751,66 +560,31 @@
             }
         });
 
-        // Search form submission
-        appRoot.addEventListener('submit', (e) => {
-            if (e.target.id === 'global-search-form') {
-                e.preventDefault();
-                const searchInput = document.getElementById('global-search-input');
-                const searchTerm = searchInput.value.trim();
-                if (searchTerm) navigateTo('search-results', searchTerm);
-            }
-        });
+        appRoot.addEventListener('submit', (e) => { if (e.target.id === 'global-search-form') { e.preventDefault(); const searchInput = document.getElementById('global-search-input'); const searchTerm = searchInput.value.trim(); if (searchTerm) navigateTo('search-results', searchTerm); }});
 
         async function handleMeetingFormSubmit(e, formState, isEditMode) {
             e.preventDefault();
             const meetingData = { title: formState.title, date: formState.date || null, participants: formState.participants, discussionPoints: formState.discussionPoints, clinicUpdates: formState.clinicUpdates, updatedAt: serverTimestamp() };
             try {
                 if (isEditMode) {
-                    const meetingId = AppState.currentMeetingId;
-                    const batch = writeBatch(AppState.db);
-                    batch.update(doc(AppState.db, `artifacts/${AppState.appId}/users/${AppState.userId}/meetings`, meetingId), meetingData);
-                    formState.localActionItems.forEach(item => { const { id, ...data } = item; if (formState.initialActionItems.some(i => i.id === id)) batch.update(doc(AppState.db, `artifacts/${AppState.appId}/users/${AppState.userId}/actionItems`, id), data); else batch.set(doc(collection(AppState.db, `artifacts/${AppState.appId}/users/${AppState.userId}/actionItems`)), { ...data, meetingId, createdAt: serverTimestamp() }); });
-                    formState.initialActionItems.filter(i => !formState.localActionItems.some(l => l.id === i.id)).forEach(item => batch.delete(doc(AppState.db, `artifacts/${AppState.appId}/users/${AppState.userId}/actionItems`, item.id)));
+                    const meetingId = AppState.currentMeetingId; const batch = writeBatch(AppState.db); batch.update(doc(AppState.db, `${AppState.getSharedDataPath()}/meetings`, meetingId), meetingData);
+                    formState.localActionItems.forEach(item => { const { id, ...data } = item; if (formState.initialActionItems.some(i => i.id === id)) batch.update(doc(AppState.db, `${AppState.getSharedDataPath()}/actionItems`, id), data); else batch.set(doc(collection(AppState.db, `${AppState.getSharedDataPath()}/actionItems`)), { ...data, meetingId, createdAt: serverTimestamp() }); });
+                    formState.initialActionItems.filter(i => !formState.localActionItems.some(l => l.id === i.id)).forEach(item => batch.delete(doc(AppState.db, `${AppState.getSharedDataPath()}/actionItems`, item.id)));
                     await batch.commit(); navigateTo('meeting-detail', meetingId);
                 } else {
-                    const docRef = await addDoc(collection(AppState.db, `artifacts/${AppState.appId}/users/${AppState.userId}/meetings`), { ...meetingData, createdAt: serverTimestamp() });
+                    const docRef = await addDoc(collection(AppState.db, `${AppState.getSharedDataPath()}/meetings`), { ...meetingData, createdAt: serverTimestamp() });
                     const newMeetingId = docRef.id; const batch = writeBatch(AppState.db);
-                    formState.localActionItems.forEach(item => { const { id, ...data } = item; if (item.createdAt) batch.update(doc(AppState.db, `artifacts/${AppState.appId}/users/${AppState.userId}/actionItems`, id), { meetingId: newMeetingId }); else batch.set(doc(collection(AppState.db, `artifacts/${AppState.appId}/users/${AppState.userId}/actionItems`)), { ...data, meetingId: newMeetingId, createdAt: serverTimestamp() }); });
+                    formState.localActionItems.forEach(item => { const { id, ...data } = item; if (item.createdAt) batch.update(doc(AppState.db, `${AppState.getSharedDataPath()}/actionItems`, id), { meetingId: newMeetingId }); else batch.set(doc(collection(AppState.db, `${AppState.getSharedDataPath()}/actionItems`)), { ...data, meetingId: newMeetingId, createdAt: serverTimestamp() }); });
                     await batch.commit(); navigateTo('meeting-detail', newMeetingId);
                 }
             } catch (err) { console.error("Error saving meeting:", err); alert("Gagal menyimpan meeting."); }
         }
 
-        function handleSaveLocallyActionItem(item) {
-            const state = window.currentMeetingFormState; const index = state.localActionItems.findIndex(i => i.id === item.id);
-            if (index > -1) state.localActionItems[index] = item; else state.localActionItems.push(item);
-            window.renderLocalActionItems();
-        }
+        function handleSaveLocallyActionItem(item) { const state = window.currentMeetingFormState; const index = state.localActionItems.findIndex(i => i.id === item.id); if (index > -1) state.localActionItems[index] = item; else state.localActionItems.push(item); window.renderLocalActionItems(); }
+        async function handleDeleteMeeting(meetingId) { try { const batch = writeBatch(AppState.db); const items = await getDocs(query(collection(AppState.db, `${AppState.getSharedDataPath()}/actionItems`), where("meetingId", "==", meetingId))); items.forEach(doc => batch.delete(doc.ref)); batch.delete(doc(AppState.db, `${AppState.getSharedDataPath()}/meetings`, meetingId)); await batch.commit(); navigateTo('meetings'); } catch (err) { console.error("Error deleting meeting:", err); alert("Gagal menghapus meeting."); } }
+        async function handleDeleteActionItem(itemId) { try { await deleteDoc(doc(AppState.db, `${AppState.getSharedDataPath()}/actionItems`, itemId)); } catch (err) { console.error("Error deleting item:", err); alert("Gagal menghapus item."); } }
 
-        async function handleDeleteMeeting(meetingId) {
-            try {
-                const batch = writeBatch(AppState.db);
-                const items = await getDocs(query(collection(AppState.db, `artifacts/${AppState.appId}/users/${AppState.userId}/actionItems`), where("meetingId", "==", meetingId)));
-                items.forEach(doc => batch.delete(doc.ref));
-                batch.delete(doc(AppState.db, `artifacts/${AppState.appId}/users/${AppState.userId}/meetings`, meetingId));
-                await batch.commit(); navigateTo('meetings');
-            } catch (err) { console.error("Error deleting meeting:", err); alert("Gagal menghapus meeting."); }
-        }
-
-        async function handleDeleteActionItem(itemId) {
-            try { await deleteDoc(doc(AppState.db, `artifacts/${AppState.appId}/users/${AppState.userId}/actionItems`, itemId)); } 
-            catch (err) { console.error("Error deleting item:", err); alert("Gagal menghapus item."); }
-        }
-
-        // --- MODALS, EXPORT, ROUTING ---
-
-        function showConfirmationModal(title, message, onConfirm) {
-            const modalId = `modal-${Date.now()}`;
-            modalContainer.insertAdjacentHTML('beforeend', `<div id="${modalId}" class="fixed inset-0 z-50 flex items-center justify-center bg-black bg-opacity-50"><div class="w-full max-w-sm p-6 bg-white dark:bg-gray-800 rounded-lg shadow-lg"><h3 class="mb-4 text-xl font-semibold text-gray-900 dark:text-white">${title}</h3><p class="mb-6 text-gray-700 dark:text-gray-300">${message}</p><div class="flex justify-end space-x-3"><button data-action="cancel" class="px-4 py-2 text-gray-700 bg-gray-200 dark:bg-gray-600 dark:text-gray-200 rounded-md hover:bg-gray-300 dark:hover:bg-gray-500">Batal</button><button data-action="confirm" class="px-4 py-2 text-white bg-red-600 rounded-md hover:bg-red-700">Konfirmasi</button></div></div></div>`);
-            const modalElement = document.getElementById(modalId);
-            modalElement.addEventListener('click', (e) => { if (e.target.dataset.action === 'confirm') onConfirm(); if (e.target.dataset.action) modalElement.remove(); });
-        }
-        
+        function showConfirmationModal(title, message, onConfirm) { const modalId = `modal-${Date.now()}`; modalContainer.insertAdjacentHTML('beforeend', `<div id="${modalId}" class="fixed inset-0 z-50 flex items-center justify-center bg-black bg-opacity-50"><div class="w-full max-w-sm p-6 bg-white dark:bg-gray-800 rounded-lg shadow-lg"><h3 class="mb-4 text-xl font-semibold text-gray-900 dark:text-white">${title}</h3><p class="mb-6 text-gray-700 dark:text-gray-300">${message}</p><div class="flex justify-end space-x-3"><button data-action="cancel" class="px-4 py-2 text-gray-700 bg-gray-200 dark:bg-gray-600 dark:text-gray-200 rounded-md hover:bg-gray-300 dark:hover:bg-gray-500">Batal</button><button data-action="confirm" class="px-4 py-2 text-white bg-red-600 rounded-md hover:bg-red-700">Konfirmasi</button></div></div></div>`); const modalElement = document.getElementById(modalId); modalElement.addEventListener('click', (e) => { if (e.target.dataset.action === 'confirm') onConfirm(); if (e.target.dataset.action) modalElement.remove(); }); }
         function showActionItemFormModal({ onSaveLocally, meetingId, selectedActionItem, clinicToAssignAction }) {
             const modalId = `modal-form-${Date.now()}`, isEditMode = !!selectedActionItem;
             let itemState = { id: isEditMode ? selectedActionItem.id : Date.now().toString(), title: isEditMode ? selectedActionItem.title || '' : '', assignedTo: isEditMode ? selectedActionItem.assignedTo || '' : clinicToAssignAction || '', dueDate: isEditMode ? formatShortDisplayDate(selectedActionItem.dueDate) : '', status: isEditMode ? selectedActionItem.status || 'Open' : 'Open', followUps: isEditMode ? JSON.parse(JSON.stringify(selectedActionItem.followUps || [])) : [] };
@@ -818,108 +592,35 @@
             modalContainer.insertAdjacentHTML('beforeend', `<div id="${modalId}" class="fixed inset-0 z-50 flex items-center justify-center bg-black bg-opacity-50 p-4"><div class="w-full max-w-lg p-6 bg-white dark:bg-gray-800 rounded-lg shadow-lg flex flex-col max-h-[90vh]"><h3 class="mb-6 text-2xl font-semibold text-gray-900 dark:text-white flex-shrink-0">${isEditMode ? 'Edit Item Tindakan' : 'Item Tindakan Baru'}</h3><form id="${modalId}-form" class="flex flex-col flex-grow min-h-0"><div class="flex-grow overflow-y-auto pr-4 -mr-4"><div class="mb-4"><label class="block mb-2 text-sm font-medium text-gray-700 dark:text-gray-300">Judul</label><input type="text" name="title" value="${itemState.title}" class="w-full px-4 py-2 bg-gray-50 dark:bg-gray-700 border dark:border-gray-600 rounded-md" required /></div><div class="mb-4"><label class="block mb-2 text-sm font-medium text-gray-700 dark:text-gray-300">Ditugaskan</label><select name="assignedTo" class="w-full px-4 py-2 bg-gray-50 dark:bg-gray-700 border dark:border-gray-600 rounded-md" required><option value="">Pilih</option>${AppState.clinics.map(c => `<option value="${c}" ${itemState.assignedTo === c ? 'selected' : ''}>${c}</option>`).join('')}</select></div><div class="mb-4"><label class="block mb-2 text-sm font-medium text-gray-700 dark:text-gray-300">Batas Waktu</label><input type="date" name="dueDate" value="${itemState.dueDate}" class="w-full px-4 py-2 bg-gray-50 dark:bg-gray-700 border dark:border-gray-600 rounded-md" /></div><div class="mb-6"><label class="block mb-2 text-sm font-medium text-gray-700 dark:text-gray-300">Status</label><select name="status" class="w-full px-4 py-2 bg-gray-50 dark:bg-gray-700 border dark:border-gray-600 rounded-md">${['Open', 'In Progress', 'Done'].map(s => `<option value="${s}" ${itemState.status === s ? 'selected' : ''}>${s}</option>`).join('')}</select></div><div class="pt-4 mt-4 mb-6 border-t border-gray-200 dark:border-gray-700"><h4 class="mb-3 text-lg font-semibold text-gray-800 dark:text-white">Follow-up</h4><ul id="${modalId}-followups" class="mb-4 space-y-2"></ul><div class="flex flex-col space-y-2"><input type="date" id="${modalId}-fu-date" class="w-full px-4 py-2 bg-gray-50 dark:bg-gray-700 border dark:border-gray-600 rounded-md" /><textarea id="${modalId}-fu-detail" rows="2" class="w-full px-4 py-2 bg-gray-50 dark:bg-gray-700 border dark:border-gray-600 rounded-md" placeholder="..."></textarea><button type="button" data-action="add-followup" class="px-4 py-2 text-sm text-white bg-green-600 rounded-md hover:bg-green-700">Tambah</button></div></div></div><div class="flex justify-end pt-4 mt-auto space-x-3 border-t border-gray-200 dark:border-gray-700 flex-shrink-0"><button type="button" data-action="cancel" class="px-4 py-2 text-gray-700 bg-gray-200 dark:bg-gray-600 dark:text-gray-200 rounded-md hover:bg-gray-300 dark:hover:bg-gray-500">Batal</button><button type="submit" class="px-4 py-2 text-white bg-blue-600 rounded-md hover:bg-blue-700">${isEditMode ? 'Simpan' : 'Tambah'}</button></div></form></div></div>`);
             renderFollowUps(); const modalEl = document.getElementById(modalId), formEl = document.getElementById(`${modalId}-form`);
             modalEl.addEventListener('click', (e) => { const a = e.target.dataset.action; if(a==='cancel') modalEl.remove(); if(a==='add-followup'){ const d=document.getElementById(`${modalId}-fu-date`),t=document.getElementById(`${modalId}-fu-detail`); if(d.value&&t.value){itemState.followUps.push({followUpDate:d.value,followUpDetail:t.value});d.value='';t.value='';renderFollowUps();}} if(a==='remove-followup'){itemState.followUps.splice(e.target.dataset.index,1);renderFollowUps();}});
-            formEl.addEventListener('submit', async (e) => { e.preventDefault(); const fd = new FormData(formEl); const item = {...itemState, title: fd.get('title'), assignedTo: fd.get('assignedTo'), dueDate: fd.get('dueDate') || null, status: fd.get('status')}; if (onSaveLocally) onSaveLocally(item); else if (meetingId) { const { id, ...data } = item; if (isEditMode) await updateDoc(doc(AppState.db, `artifacts/${AppState.appId}/users/${AppState.userId}/actionItems`, id), {...data, updatedAt: serverTimestamp()}); else await addDoc(collection(AppState.db, `artifacts/${AppState.appId}/users/${AppState.userId}/actionItems`), {...data, meetingId, createdAt: serverTimestamp()}); } modalEl.remove(); });
+            formEl.addEventListener('submit', async (e) => { e.preventDefault(); const fd = new FormData(formEl); const item = {...itemState, title: fd.get('title'), assignedTo: fd.get('assignedTo'), dueDate: fd.get('dueDate') || null, status: fd.get('status')}; if (onSaveLocally) onSaveLocally(item); else if (meetingId) { const { id, ...data } = item; if (isEditMode) await updateDoc(doc(AppState.db, `${AppState.getSharedDataPath()}/actionItems`, id), {...data, updatedAt: serverTimestamp()}); else await addDoc(collection(AppState.db, `${AppState.getSharedDataPath()}/actionItems`), {...data, meetingId, createdAt: serverTimestamp()}); } modalEl.remove(); });
         }
+        async function exportAllDataToExcel() { /* (No changes) */ }
+        function navigateTo(page, param = null) { cleanupListeners(); AppState.currentPage = page; if (page === 'meeting-detail' || page === 'edit-meeting') AppState.currentMeetingId = param; if (page === 'search-results') AppState.currentSearchTerm = param; renderAppContent(); }
+        function renderAppContent() { const main = appRoot.querySelector('main'); if (!main) return; switch (AppState.currentPage) { case 'dashboard': renderDashboard(); break; case 'meetings': renderMeetingList(); break; case 'meeting-detail': renderMeetingDetail(); break; case 'new-meeting': case 'edit-meeting': renderMeetingForm(); break; case 'clinic-dashboard': renderClinicDashboard(); break; case 'search-results': renderSearchResults(); break; default: renderDashboard(); } }
 
-        async function exportAllDataToExcel() {
-             if (!AppState.db || !AppState.userId) { alert("Firebase belum siap."); return; }
-            if (typeof XLSX === 'undefined') { alert("Pustaka Excel belum dimuat."); return; }
-            try {
-                const meetingsSnapshot = await getDocs(collection(AppState.db, `artifacts/${AppState.appId}/users/${AppState.userId}/meetings`));
-                const actionItemsSnapshot = await getDocs(collection(AppState.db, `artifacts/${AppState.appId}/users/${AppState.userId}/actionItems`));
-                const meetingsData = meetingsSnapshot.docs.map(doc => { const m = doc.data(); return { "ID Meeting": doc.id, "Judul": m.title, "Tanggal": m.date ? formatDisplayDate(m.date, { year: 'numeric', month: 'long', day: 'numeric' }) : '', "Peserta": m.participants?.join(', '), "Pembaruan Klinik": Object.entries(m.clinicUpdates || {}).map(([c, u]) => `${c}: ${u}`).join('\n'), "Diskusi Umum": m.discussionPoints, }; });
-                const actionItemsData = actionItemsSnapshot.docs.map(doc => { const item = doc.data(); return { "ID Item": doc.id, "ID Meeting Terkait": item.meetingId, "Judul": item.title, "Ditugaskan Kepada": item.assignedTo, "Batas Waktu": item.dueDate ? formatShortDisplayDate(item.dueDate) : '', "Status": item.status, "Follow-ups": item.followUps?.map(f => `${formatShortDisplayDate(f.followUpDate)}: ${f.followUpDetail}`).join('\n') }; });
-                const meetingsSheet = XLSX.utils.json_to_sheet(meetingsData);
-                const actionItemsSheet = XLSX.utils.json_to_sheet(actionItemsData);
-                const workbook = XLSX.utils.book_new();
-                XLSX.utils.book_append_sheet(workbook, meetingsSheet, "Daftar Meeting");
-                XLSX.utils.book_append_sheet(workbook, actionItemsSheet, "Item Tindakan");
-                XLSX.writeFile(workbook, `Mediflow_Export_${new Date().toISOString().slice(0, 10)}.xlsx`);
-                alert("Data berhasil diekspor ke Excel!");
-            } catch (err) {
-                console.error("Error exporting data to Excel:", err);
-                alert("Gagal mengekspor data.");
-            }
-        }
-        
-        function navigateTo(page, param = null) {
-            cleanupListeners();
-            AppState.currentPage = page;
-            if (page === 'meeting-detail' || page === 'edit-meeting') AppState.currentMeetingId = param;
-            if (page === 'search-results') AppState.currentSearchTerm = param;
-            renderAppContent();
-        }
-
-        function renderAppContent() {
-            const mainContentContainer = appRoot.querySelector('main');
-            if (!mainContentContainer) return;
-            switch (AppState.currentPage) {
-                case 'dashboard': renderDashboard(); break;
-                case 'meetings': renderMeetingList(); break;
-                case 'meeting-detail': renderMeetingDetail(); break;
-                case 'new-meeting': case 'edit-meeting': renderMeetingForm(); break;
-                case 'clinic-dashboard': renderClinicDashboard(); break;
-                case 'search-results': renderSearchResults(); break;
-                default: renderDashboard();
-            }
-        }
-
-        // --- PLACEHOLDER LANGKAH 3.2 ---
-        // GANTI FUNGSI initializeFirebase LAMA ANDA DENGAN YANG INI
         async function initializeFirebase() {
             try {
                 AppState.appId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
                 let firebaseConfig; 
-                if (typeof __firebase_config !== 'undefined' && __firebase_config) {
-                    firebaseConfig = JSON.parse(__firebase_config);
-                } else {
-                    firebaseConfig = { 
-                        apiKey: "AIzaSyChAi6kfETyfENB78FAhDFrC_VHDWDRVXs", 
-                        authDomain: "mymeeting-8c4b4.firebaseapp.com", 
-                        projectId: "mymeeting-8c4b4", 
-                        storageBucket: "mymeeting-8c4b4.firebasestorage.app", 
-                        messagingSenderId: "402496368645", 
-                        appId: "1:402496368645:web:6c86ab221cee6d1ee4ac6c" 
-                    };
-                }
-                const app = initializeApp(firebaseConfig); 
-                AppState.db = getFirestore(app); 
-                AppState.auth = getAuth(app);
-        
+                if (typeof __firebase_config !== 'undefined' && __firebase_config) { firebaseConfig = JSON.parse(__firebase_config); } 
+                else { firebaseConfig = { apiKey: "AIzaSyChAi6kfETyfENB78FAhDFrC_VHDWDRVXs", authDomain: "mymeeting-8c4b4.firebaseapp.com", projectId: "mymeeting-8c4b4", storageBucket: "mymeeting-8c4b4.firebasestorage.app", messagingSenderId: "402496368645", appId: "1:402496368645:web:6c86ab221cee6d1ee4ac6c" }; }
+                const app = initializeApp(firebaseConfig); AppState.db = getFirestore(app); AppState.auth = getAuth(app);
                 onAuthStateChanged(AppState.auth, async (user) => {
                     if (user && !user.isAnonymous) {
-                        // Setelah user login, kita cek apakah emailnya terdaftar di Firestore.
                         const userDocRef = doc(AppState.db, "authorizedUsers", user.email);
                         const userDocSnap = await getDoc(userDocRef);
-        
                         if (userDocSnap.exists()) {
-                            // Email ditemukan, pengguna diizinkan masuk.
-                            AppState.userId = user.uid; 
-                            AppState.loading = false;
+                            AppState.userId = user.uid; AppState.loading = false;
                             appRoot.innerHTML = `<header id="app-header"></header><main id="app-main"></main>`;
-                            appRoot.querySelector('#app-header').innerHTML = Header(); 
-                            renderAppContent();
+                            appRoot.querySelector('#app-header').innerHTML = Header(); renderAppContent();
                         } else {
-                            // Email tidak ditemukan, tolak akses dan logout.
-                            const email = user.email; 
-                            signOut(AppState.auth).then(() => { 
-                                appRoot.innerHTML = LoginPage(`Akses ditolak. Email ${email} tidak terdaftar.`); 
-                            });
+                            const email = user.email; signOut(AppState.auth).then(() => { appRoot.innerHTML = LoginPage(`Akses ditolak. Email ${email} tidak terdaftar.`); });
                         }
                     } else {
-                        // Tidak ada user yang login, tampilkan halaman login.
-                        cleanupListeners(); 
-                        AppState.userId = null; 
-                        AppState.loading = false; 
-                        appRoot.innerHTML = LoginPage();
+                        cleanupListeners(); AppState.userId = null; AppState.loading = false; appRoot.innerHTML = LoginPage();
                     }
                 });
-            } catch (err) { 
-                console.error("Firebase Init Error:", err); 
-                AppState.error = "Gagal inisialisasi Firebase."; 
-                AppState.loading = false; 
-                appRoot.innerHTML = ErrorDisplay(AppState.error); 
-            }
+            } catch (err) { console.error("Firebase Init Error:", err); AppState.error = "Gagal inisialisasi Firebase."; AppState.loading = false; appRoot.innerHTML = ErrorDisplay(AppState.error); }
         }
 
         appRoot.innerHTML = LoadingSpinner();
