@@ -76,15 +76,10 @@
             chartInstances: {},
         };
 
-        // --- AUTHORIZED USERS ---
-        const authorizedEmails = [
-            'muhherman226@gmail.com',
-            'afm.firmansyahagung@gmail.com',
-            'ekonovidianto7@gmail.com',
-            'fati.imahss@gmail.com',
-            'kadeklestary@gmail.com',
-            'pekaktemplar@gmail.com'
-        ];
+        // --- PLACEHOLDER LANGKAH 3.1 ---
+        // Daftar email yang sebelumnya ada di sini telah dihapus.
+        // Manajemen akses sekarang ditangani oleh Firebase Firestore.
+        // Silakan ikuti Langkah 1 dan 2 dari panduan.
         
         // DOM elements
         const appRoot = document.getElementById('app-root');
@@ -869,25 +864,62 @@
             }
         }
 
+        // --- PLACEHOLDER LANGKAH 3.2 ---
+        // GANTI FUNGSI initializeFirebase LAMA ANDA DENGAN YANG INI
         async function initializeFirebase() {
             try {
                 AppState.appId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
-                let firebaseConfig; if (typeof __firebase_config !== 'undefined' && __firebase_config) firebaseConfig = JSON.parse(__firebase_config); else firebaseConfig = { apiKey: "AIzaSyChAi6kfETyfENB78FAhDFrC_VHDWDRVXs", authDomain: "mymeeting-8c4b4.firebaseapp.com", projectId: "mymeeting-8c4b4", storageBucket: "mymeeting-8c4b4.firebasestorage.app", messagingSenderId: "402496368645", appId: "1:402496368645:web:6c86ab221cee6d1ee4ac6c" };
-                const app = initializeApp(firebaseConfig); AppState.db = getFirestore(app); AppState.auth = getAuth(app);
-                onAuthStateChanged(AppState.auth, (user) => {
+                let firebaseConfig; 
+                if (typeof __firebase_config !== 'undefined' && __firebase_config) {
+                    firebaseConfig = JSON.parse(__firebase_config);
+                } else {
+                    firebaseConfig = { 
+                        apiKey: "AIzaSyChAi6kfETyfENB78FAhDFrC_VHDWDRVXs", 
+                        authDomain: "mymeeting-8c4b4.firebaseapp.com", 
+                        projectId: "mymeeting-8c4b4", 
+                        storageBucket: "mymeeting-8c4b4.firebasestorage.app", 
+                        messagingSenderId: "402496368645", 
+                        appId: "1:402496368645:web:6c86ab221cee6d1ee4ac6c" 
+                    };
+                }
+                const app = initializeApp(firebaseConfig); 
+                AppState.db = getFirestore(app); 
+                AppState.auth = getAuth(app);
+        
+                onAuthStateChanged(AppState.auth, async (user) => {
                     if (user && !user.isAnonymous) {
-                        if (authorizedEmails.includes(user.email)) {
-                            AppState.userId = user.uid; AppState.loading = false;
+                        // Setelah user login, kita cek apakah emailnya terdaftar di Firestore.
+                        const userDocRef = doc(AppState.db, "authorizedUsers", user.email);
+                        const userDocSnap = await getDoc(userDocRef);
+        
+                        if (userDocSnap.exists()) {
+                            // Email ditemukan, pengguna diizinkan masuk.
+                            AppState.userId = user.uid; 
+                            AppState.loading = false;
                             appRoot.innerHTML = `<header id="app-header"></header><main id="app-main"></main>`;
-                            appRoot.querySelector('#app-header').innerHTML = Header(); renderAppContent();
+                            appRoot.querySelector('#app-header').innerHTML = Header(); 
+                            renderAppContent();
                         } else {
-                            const email = user.email; signOut(AppState.auth).then(() => { appRoot.innerHTML = LoginPage(`Akses ditolak untuk: ${email}`); });
+                            // Email tidak ditemukan, tolak akses dan logout.
+                            const email = user.email; 
+                            signOut(AppState.auth).then(() => { 
+                                appRoot.innerHTML = LoginPage(`Akses ditolak. Email ${email} tidak terdaftar.`); 
+                            });
                         }
                     } else {
-                        cleanupListeners(); AppState.userId = null; AppState.loading = false; appRoot.innerHTML = LoginPage();
+                        // Tidak ada user yang login, tampilkan halaman login.
+                        cleanupListeners(); 
+                        AppState.userId = null; 
+                        AppState.loading = false; 
+                        appRoot.innerHTML = LoginPage();
                     }
                 });
-            } catch (err) { console.error("Firebase Init Error:", err); AppState.error = "Gagal inisialisasi Firebase."; AppState.loading = false; appRoot.innerHTML = ErrorDisplay(AppState.error); }
+            } catch (err) { 
+                console.error("Firebase Init Error:", err); 
+                AppState.error = "Gagal inisialisasi Firebase."; 
+                AppState.loading = false; 
+                appRoot.innerHTML = ErrorDisplay(AppState.error); 
+            }
         }
 
         appRoot.innerHTML = LoadingSpinner();
